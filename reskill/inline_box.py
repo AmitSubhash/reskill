@@ -173,10 +173,18 @@ def render_question(q: Question, streak: int = 0) -> str:
 
     # Question prompt
     prompt_lines = _wrap_text(q.prompt, inner - 2)
-    for i, pl in enumerate(prompt_lines):
+    for pl in prompt_lines:
         styled = paint(pl, INK, BOLD)
-        accent_arg = accent if i == 0 else accent
-        out.append(_row(styled, inner, border_color, left_accent=accent_arg))
+        out.append(_row(styled, inner, border_color, left_accent=accent))
+
+    # Optional code snippet
+    if q.code:
+        out.append(_row("", inner, border_color, left_accent=accent))
+        for code_line in q.code.split("\n"):
+            # Pad code to a consistent column, render in teal
+            truncated = code_line[: inner - 4]
+            styled = paint("  " + truncated, TEAL)
+            out.append(_row(styled, inner, border_color, left_accent=accent))
 
     out.append(_row("", inner, border_color, left_accent=accent))
 
@@ -242,6 +250,13 @@ def render_answer_reveal(q: Question, chosen: str | None, xp_earned: int) -> str
     out.append(_indent() + top)
 
     out.append(_row("", inner, border_color, left_accent=accent))
+
+    # Show the code again on reveal so the reader can re-check
+    if q.code:
+        for code_line in q.code.split("\n"):
+            truncated = code_line[: inner - 4]
+            out.append(_row(paint("  " + truncated, TEAL, DIM), inner, border_color, left_accent=accent))
+        out.append(_row("", inner, border_color, left_accent=accent))
 
     # Options with reveal marks
     for row in _render_options_grid(q, inner, answered_label=chosen or ""):

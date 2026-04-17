@@ -1,12 +1,30 @@
-"""Question data model and template-based generator."""
+"""Question data model and template-based generator.
+
+Question DESIGN PRINCIPLES:
+  1. Force a small decision, not a lookup. "Why does X behave this way?" beats
+     "What is X?"
+  2. Include code when possible. Concrete reasoning beats abstract recall.
+  3. All options should look plausible. No obvious throw-aways.
+  4. The explanation should teach something the developer didn't know, not
+     just confirm the right letter.
+  5. Ideal answer time: 20-45 seconds. If it's <10s, it's too easy; if >60s,
+     it's a brain teaser, not micro-learning.
+
+Question FORMATS:
+  - output: show code, predict what prints
+  - bug: show subtly broken code, find the line
+  - tradeoff: two ways to solve a problem; one is meaningfully better
+  - scenario: given a constraint, pick the right approach
+  - why: Claude made a choice; explain the reason behind it
+  - gotcha: show a common "looks right but isn't" pattern
+"""
 
 from __future__ import annotations
 
-import ast
 import hashlib
 import random
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass
@@ -22,7 +40,9 @@ class Question:
     options: list[Option]
     explanation: str
     concept: str
-    source: str = "template"  # template | llm | manual
+    format: str = "why"          # output | bug | tradeoff | scenario | why | gotcha
+    code: str | None = None      # optional code snippet shown above the prompt
+    source: str = "template"
 
     @property
     def correct_label(self) -> str:
@@ -33,215 +53,428 @@ class Question:
 
     @property
     def id(self) -> str:
-        h = hashlib.sha256(self.prompt.encode()).hexdigest()
-        return h[:12]
+        return hashlib.sha256(self.prompt.encode()).hexdigest()[:12]
 
 
-# ───────── Template bank ─────────────────────────────────────
-# Patterns detected in streaming content map to questions here.
-# Patterns are ordered: first match wins.
+def _q(**kwargs) -> Question:
+    opts_raw = kwargs.pop("opts")
+    opts = [
+        Option(str(i + 1), text, i == kwargs.pop("correct_idx", 0))
+        for i, text in enumerate(opts_raw)
+    ] if False else None
+    # build options from (text, correct) tuples
+    opts = []
+    for i, item in enumerate(opts_raw):
+        if isinstance(item, tuple):
+            text, correct = item
+        else:
+            text, correct = item, False
+        opts.append(Option(str(i + 1), text, correct))
+    return Question(options=opts, **kwargs)
+
+
+# ───────── Template bank (thought-provoking, code-heavy) ──────
 
 TEMPLATE_BANK: dict[str, list[Question]] = {
     "try_except": [
-        Question(
+        _q(
             concept="error-handling",
-            prompt="Why catch specific exceptions instead of bare except?",
-            options=[
-                Option("1", "Performance is better", False),
-                Option("2", "Clearer error handling and easier debugging", True),
-                Option("3", "Python requires it", False),
-                Option("4", "It's just convention", False),
+            format="gotcha",
+            prompt="This 'safe' code silently breaks something important. What?",
+            code=(
+                "try:\n"
+                "    result = fetch_data()\n"
+                "except:\n"
+                "    result = None"
+            ),
+            opts=[
+                ("The user's Ctrl+C now does nothing -- KeyboardInterrupt is caught", True),
+                ("Silently returns None, which is actually fine for most cases", False),
+                ("Only catches Exception, so bugs can still leak through", False),
+                ("Nothing -- bare except is a perfectly safe pattern", False),
             ],
             explanation=(
-                "Bare except catches everything including KeyboardInterrupt and "
-                "SystemExit, hiding bugs and breaking Ctrl+C."
+                "Bare `except:` catches BaseException, which includes KeyboardInterrupt, "
+                "SystemExit, and GeneratorExit. Users pressing Ctrl+C will get trapped. "
+                "Use `except Exception:` if you really need a catch-all, but prefer "
+                "specific exception types."
             ),
         ),
-        Question(
+        _q(
             concept="error-handling",
-            prompt="What's the parent class of most user-facing Python exceptions?",
-            options=[
-                Option("1", "BaseException", False),
-                Option("2", "Exception", True),
-                Option("3", "RuntimeError", False),
-                Option("4", "StandardError", False),
+            format="why",
+            prompt="Why do experienced devs rarely re-raise the same exception type after logging?",
+            code=(
+                "try:\n"
+                "    charge_card(amount)\n"
+                "except PaymentError as e:\n"
+                "    logger.error('Payment failed: %s', e)\n"
+                "    raise PaymentError(str(e))  # <-- this line"
+            ),
+            opts=[
+                ("It's slower -- creating a new exception has overhead", False),
+                ("It destroys the original traceback and exception chain", True),
+                ("Python forbids it in newer versions", False),
+                ("It causes the logger to double-log the error", False),
             ],
             explanation=(
-                "Exception is the base for ordinary errors. BaseException also "
-                "includes SystemExit and KeyboardInterrupt which you usually "
-                "don't want to catch."
+                "`raise PaymentError(str(e))` creates a NEW exception and loses the "
+                "original traceback plus the `__cause__` chain. Just use bare `raise` "
+                "to re-raise, or `raise NewError() from e` to wrap while keeping the "
+                "context. This matters a lot when debugging production."
             ),
         ),
     ],
     "lru_cache": [
-        Question(
+        _q(
             concept="caching",
-            prompt="What does @lru_cache(maxsize=128) do?",
-            options=[
-                Option("1", "Logs function calls for debugging", False),
-                Option("2", "Caches results, evicts least recently used", True),
-                Option("3", "Makes the function thread-safe", False),
-                Option("4", "Retries on failure", False),
+            format="gotcha",
+            prompt="This cache looks fine but will leak memory in a long-running process. Why?",
+            code=(
+                "@lru_cache\n"
+                "def get_user(user: User) -> dict:\n"
+                "    return db.query(...).filter_by(id=user.id).first()"
+            ),
+            opts=[
+                ("@lru_cache without maxsize defaults to unlimited", True),
+                ("User objects aren't hashable by default", False),
+                ("db.query() returns a new object each time, breaking the cache", False),
+                ("lru_cache should be applied to methods, not functions", False),
             ],
             explanation=(
-                "LRU = Least Recently Used. When the cache fills past maxsize, "
-                "the oldest entry is discarded. Great for pure functions with "
-                "repeated inputs."
+                "Bare `@lru_cache` is equivalent to `@lru_cache(maxsize=128)` in older "
+                "Python, but `@lru_cache` with no parens in modern Python means unlimited. "
+                "Also: caching by User object is fragile -- if User has a custom __eq__ "
+                "or is mutable, cache hits become inconsistent. Prefer caching by primitive "
+                "keys like `user.id`."
+            ),
+        ),
+        _q(
+            concept="caching",
+            format="tradeoff",
+            prompt="Both memoize a pure function. When would you reach for the second one?",
+            code=(
+                "# A:\n"
+                "@lru_cache(maxsize=128)\n"
+                "def solve(n: int) -> int: ...\n\n"
+                "# B:\n"
+                "_cache: dict[int, int] = {}\n"
+                "def solve(n: int) -> int:\n"
+                "    if n not in _cache:\n"
+                "        _cache[n] = ...\n"
+                "    return _cache[n]"
+            ),
+            opts=[
+                ("Never -- lru_cache is always better", False),
+                ("When you need to inspect, clear, or mutate cache entries at runtime", True),
+                ("When the function has side effects", False),
+                ("When the function takes dict arguments", False),
+            ],
+            explanation=(
+                "`lru_cache` is opaque -- you can call `.cache_info()` and `.cache_clear()`, "
+                "but you can't peek at entries or evict a specific key. Manual dict caching "
+                "is uglier but gives full control: inspect state, pre-warm from disk, "
+                "selectively evict, share across modules. Use lru_cache by default; reach "
+                "for manual dicts when you need control."
             ),
         ),
     ],
     "async_def": [
-        Question(
+        _q(
             concept="async",
-            prompt="What does calling an async function return?",
-            options=[
-                Option("1", "The function's return value directly", False),
-                Option("2", "A coroutine that must be awaited", True),
-                Option("3", "A Future object", False),
-                Option("4", "None until the task completes", False),
+            format="output",
+            prompt="What does this print?",
+            code=(
+                "async def work():\n"
+                "    print('starting')\n"
+                "    return 42\n\n"
+                "result = work()\n"
+                "print(result)"
+            ),
+            opts=[
+                ("starting\\n42", False),
+                ("42", False),
+                ("<coroutine object work at 0x...>", True),
+                ("RuntimeError: coroutine never awaited", False),
             ],
             explanation=(
-                "async def creates a coroutine. You get the actual value by "
-                "awaiting it or passing it to asyncio.run() / gather()."
+                "Calling an async function does NOT run it -- it returns a coroutine "
+                "object. 'starting' never prints because the body doesn't execute. "
+                "You'd need `asyncio.run(work())` or `await work()` to actually run it. "
+                "You WILL see a RuntimeWarning on exit though: 'coroutine was never "
+                "awaited'."
+            ),
+        ),
+        _q(
+            concept="async",
+            format="gotcha",
+            prompt="This async function isn't faster than the sync version. Why?",
+            code=(
+                "async def fetch_all(urls):\n"
+                "    results = []\n"
+                "    for url in urls:\n"
+                "        r = await client.get(url)\n"
+                "        results.append(r)\n"
+                "    return results"
+            ),
+            opts=[
+                ("`async for` is needed instead of a plain for loop", False),
+                ("`await` inside a for loop still runs sequentially -- use gather()", True),
+                ("httpx client isn't async-compatible in this pattern", False),
+                ("You need to await the results list at the end", False),
+            ],
+            explanation=(
+                "`await` pauses until this one request completes, THEN the loop moves "
+                "on. To run concurrently, collect coroutines first and `await "
+                "asyncio.gather(*[client.get(u) for u in urls])`. This is the #1 async "
+                "mistake -- you opt into async but accidentally keep the sequential "
+                "behavior."
             ),
         ),
     ],
     "jwt": [
-        Question(
+        _q(
             concept="jwt",
-            prompt="Why do JWT tokens have an expiry time?",
-            options=[
-                Option("1", "Performance (smaller tokens over time)", False),
-                Option("2", "Security: limits damage if a token is stolen", True),
-                Option("3", "Storage: saves database space", False),
-                Option("4", "GDPR compliance", False),
+            format="scenario",
+            prompt=(
+                "Your JWT has a 30-minute expiry. A user's phone goes offline for an hour. "
+                "They come back and fire 10 API calls. What's the best UX?"
+            ),
+            opts=[
+                ("Return 401 on all 10 -- the client should re-login", False),
+                ("Server-side extend the expiry if the token is 'nearly' valid", False),
+                ("Use refresh tokens: short access token + long refresh token", True),
+                ("Remove expiry entirely -- rely on revocation lists", False),
             ],
             explanation=(
-                "JWTs are stateless -- once issued, the server can't revoke them. "
-                "Expiry limits the window an attacker could use a stolen token."
+                "Short access tokens limit damage from theft (good). But pure short "
+                "tokens mean frequent re-logins (bad UX). Refresh tokens split the "
+                "trade-off: the access token expires fast, but the client silently "
+                "exchanges a long-lived refresh token for a new access token in the "
+                "background. Revocation lists are fine but add database load on every "
+                "request."
+            ),
+        ),
+        _q(
+            concept="jwt",
+            format="gotcha",
+            prompt="Why do security auditors flag this JWT code?",
+            code=(
+                "payload = jwt.decode(\n"
+                "    token,\n"
+                "    SECRET,\n"
+                "    algorithms=['HS256', 'none']\n"
+                ")"
+            ),
+            opts=[
+                ("'none' bypasses signature verification -- anyone can forge tokens", True),
+                ("Should use 'RS256' instead of 'HS256' in all cases", False),
+                ("The SECRET is being passed positionally instead of by keyword", False),
+                ("jwt.decode should be awaited", False),
+            ],
+            explanation=(
+                "The 'none' algorithm means 'no signature verification'. Including it in "
+                "`algorithms` lets an attacker send a token with `alg: none` and any "
+                "payload they want -- and your code accepts it. This is the classic "
+                "'alg confusion' attack. Never include 'none' in the allowed algorithms "
+                "list. RS256 vs HS256 is orthogonal (asymmetric vs symmetric signing)."
             ),
         ),
     ],
     "http_status_created": [
-        Question(
+        _q(
             concept="http-status",
-            prompt="Which HTTP status code should a successful POST that creates a resource return?",
-            options=[
-                Option("1", "200 OK", False),
-                Option("2", "201 Created", True),
-                Option("3", "204 No Content", False),
-                Option("4", "202 Accepted", False),
-            ],
-            explanation=(
-                "201 Created is the precise code for a POST that created something. "
-                "Include a Location header pointing to the new resource."
+            format="scenario",
+            prompt=(
+                "A client POSTs to /users. Creation succeeds but takes 30s because of "
+                "downstream systems. What's the most correct response code?"
             ),
-        ),
-    ],
-    "list_comprehension": [
-        Question(
-            concept="comprehensions",
-            prompt="What's the main advantage of a list comprehension over a for loop with append?",
-            options=[
-                Option("1", "It's always much faster", False),
-                Option("2", "More concise, and slightly faster for simple cases", True),
-                Option("3", "Uses less memory in all cases", False),
-                Option("4", "Supports async operations", False),
+            opts=[
+                ("201 Created, returned after everything finishes", False),
+                ("202 Accepted, with a polling URL for status", True),
+                ("200 OK, with a 'pending' field in the body", False),
+                ("503 Service Unavailable until the creation completes", False),
             ],
             explanation=(
-                "List comprehensions are idiomatic Python. They're roughly 30-50% "
-                "faster than equivalent append loops for simple cases, and often "
-                "clearer."
-            ),
-        ),
-    ],
-    "depends": [
-        Question(
-            concept="fastapi",
-            prompt="What does FastAPI's Depends() provide?",
-            options=[
-                Option("1", "Automatic dependency installation", False),
-                Option("2", "Dependency injection for sharing logic and auth", True),
-                Option("3", "Async retry logic", False),
-                Option("4", "Route caching", False),
-            ],
-            explanation=(
-                "Depends() injects values (DB sessions, current user, config) into "
-                "routes. It makes dependencies testable, reusable, and declarative."
+                "201 is for 'creation happened and here it is, now'. For slow or async "
+                "creation, use `202 Accepted` with a Location or status URL the client "
+                "can poll. 200 works but misses the signal that this is an async "
+                "operation. 503 is wrong -- the service isn't unavailable, it's just "
+                "being slow."
             ),
         ),
     ],
     "n_plus_one": [
-        Question(
+        _q(
             concept="databases",
-            prompt="What's the fix for an N+1 query pattern?",
-            options=[
-                Option("1", "Add indexes to all foreign keys", False),
-                Option("2", "Use eager loading or a JOIN to fetch related data", True),
-                Option("3", "Move to a NoSQL database", False),
-                Option("4", "Cache each individual query", False),
+            format="bug",
+            prompt="This endpoint is slow for users with many orders. Which line is the villain?",
+            code=(
+                "1  users = db.query(User).all()\n"
+                "2  for user in users:\n"
+                "3      user.order_total = sum(\n"
+                "4          o.amount for o in user.orders\n"
+                "5      )\n"
+                "6  return users"
+            ),
+            opts=[
+                ("Line 1 -- should use paginate()", False),
+                ("Line 4 -- lazy-loads orders once per user (N+1)", True),
+                ("Line 3 -- sum() is O(n) per user", False),
+                ("Line 6 -- serializing the list is the bottleneck", False),
             ],
             explanation=(
-                "N+1 happens when fetching N parents then doing 1 query per child. "
-                "Fix by joining (SQL JOIN) or eager loading (joinedload, "
-                "selectinload) to fetch everything in 1-2 queries."
+                "`user.orders` on line 4 is a lazy relationship. For each user, the ORM "
+                "fires a separate query -- 1 query for users + N queries for orders. "
+                "Fix: `db.query(User).options(selectinload(User.orders)).all()` does "
+                "it in 2 queries regardless of N."
+            ),
+        ),
+    ],
+    "list_comprehension": [
+        _q(
+            concept="comprehensions",
+            format="output",
+            prompt="What does this print?",
+            code=(
+                "data = [1, 2, 3, 4, 5]\n"
+                "result = [x for x in data if x > 2 else 0]\n"
+                "print(result)"
+            ),
+            opts=[
+                ("[0, 0, 3, 4, 5]", False),
+                ("[3, 4, 5]", False),
+                ("SyntaxError", True),
+                ("[1, 2, 3, 4, 5]", False),
+            ],
+            explanation=(
+                "`if ... else` in a comprehension only works in the VALUE position, "
+                "not the filter position. Legal: `[x if x>2 else 0 for x in data]`. "
+                "Or filter: `[x for x in data if x>2]`. You can't combine `if...else` "
+                "WITH a filter in the same comp; you'd nest them: "
+                "`[x if x>2 else 0 for x in data if x is not None]`."
+            ),
+        ),
+    ],
+    "depends": [
+        _q(
+            concept="fastapi",
+            format="why",
+            prompt="Why use Depends() here instead of calling get_db() directly?",
+            code=(
+                "@app.get('/users/{id}')\n"
+                "def get_user(id: int, db: Session = Depends(get_db)):\n"
+                "    return db.query(User).get(id)"
+            ),
+            opts=[
+                ("Performance -- Depends() caches the connection", False),
+                ("Testability -- you can override get_db in tests with one line", True),
+                ("FastAPI requires it for type hints to work", False),
+                ("It automatically handles transactions", False),
+            ],
+            explanation=(
+                "Dependency injection's main win is testing. In tests: "
+                "`app.dependency_overrides[get_db] = lambda: fake_session`. Now every "
+                "endpoint uses the fake DB without changing any application code. "
+                "Calling get_db() directly ties your route to that specific function "
+                "call site, making tests much harder to write."
             ),
         ),
     ],
     "generator_yield": [
-        Question(
+        _q(
             concept="generators",
-            prompt="Why use `yield` instead of building and returning a list?",
-            options=[
-                Option("1", "yield is always faster", False),
-                Option("2", "Lazy evaluation: values produced on demand, lower memory", True),
-                Option("3", "Generators support more methods than lists", False),
-                Option("4", "It's required for async code", False),
+            format="tradeoff",
+            prompt="Both process a 10GB log file. Which one do you reach for and why?",
+            code=(
+                "# A:\n"
+                "def parse_log(path):\n"
+                "    with open(path) as f:\n"
+                "        lines = f.readlines()\n"
+                "    return [parse(line) for line in lines]\n\n"
+                "# B:\n"
+                "def parse_log(path):\n"
+                "    with open(path) as f:\n"
+                "        for line in f:\n"
+                "            yield parse(line)"
+            ),
+            opts=[
+                ("A -- simpler, and the OS page cache handles memory", False),
+                ("B -- streams one line at a time, constant memory", True),
+                ("A if you need sorting later, B otherwise", False),
+                ("Either one -- Python's GC handles it", False),
             ],
             explanation=(
-                "Generators produce values one at a time. For large or infinite "
-                "sequences, you don't need to hold everything in memory at once."
+                "A loads the entire 10GB file into memory as a list, then builds ANOTHER "
+                "list of parsed results. B processes one line at a time, holding only "
+                "the current line in memory. For large files, B uses ~O(1) memory vs "
+                "A's O(N). This is the core value of generators: lazy evaluation."
             ),
         ),
     ],
     "context_manager_with": [
-        Question(
+        _q(
             concept="resources",
-            prompt="What does the `with` statement guarantee?",
-            options=[
-                Option("1", "Thread-safe access", False),
-                Option("2", "Cleanup runs even if an exception is raised", True),
-                Option("3", "The block executes atomically", False),
-                Option("4", "File contents are auto-parsed", False),
+            format="bug",
+            prompt="What's wrong with this 'clean' code?",
+            code=(
+                "files = [open(p, 'r') for p in paths]\n"
+                "try:\n"
+                "    data = [f.read() for f in files]\n"
+                "finally:\n"
+                "    for f in files:\n"
+                "        f.close()"
+            ),
+            opts=[
+                ("Nothing -- the finally block handles cleanup", False),
+                ("If open() raises on path 5/10, paths 1-4 never get closed", True),
+                ("f.read() should be in a with block", False),
+                ("It should use pathlib instead of open()", False),
             ],
             explanation=(
-                "The context manager's __exit__ runs on normal completion AND on "
-                "exceptions. That's why it's safer than manual open/close."
+                "If `open()` raises partway through the comprehension, the files already "
+                "opened will leak -- they're not in `files` yet, so the finally block "
+                "misses them. `contextlib.ExitStack` handles this cleanly: "
+                "`with ExitStack() as stack: files = [stack.enter_context(open(p)) for p in paths]`. "
+                "Each file is registered as soon as it opens, so partial failure still cleans up."
             ),
         ),
     ],
     "pytest_fixture": [
-        Question(
+        _q(
             concept="testing",
-            prompt="What does @pytest.fixture do?",
-            options=[
-                Option("1", "Marks a function as a test case", False),
-                Option("2", "Provides reusable setup/teardown for tests", True),
-                Option("3", "Skips the test until a condition is met", False),
-                Option("4", "Runs the test in parallel", False),
+            format="why",
+            prompt=(
+                "You have a pytest fixture that opens a DB connection. Your test suite is "
+                "slow because it opens a new connection for every test. How do you fix it?"
+            ),
+            code=(
+                "@pytest.fixture\n"
+                "def db():\n"
+                "    conn = create_engine(TEST_URL).connect()\n"
+                "    yield conn\n"
+                "    conn.close()"
+            ),
+            opts=[
+                ("Add @pytest.fixture(scope='session') -- one connection for all tests", True),
+                ("Replace yield with return -- it's faster", False),
+                ("Use a context manager instead of a fixture", False),
+                ("Fixtures can't be cached; you have to use a global", False),
             ],
             explanation=(
-                "Fixtures create test dependencies (db sessions, test data, mocks) "
-                "that pytest injects into test functions by parameter name."
+                "The default scope is 'function' -- fixture runs once per test. Other "
+                "scopes: 'class' (once per test class), 'module' (once per file), "
+                "'session' (once per pytest run). Use session for expensive setup that's "
+                "safe to share (DB connections, Docker containers). Be careful: shared "
+                "state between tests is a common source of flaky tests."
             ),
         ),
     ],
 }
 
 
-# ───────── Pattern matchers (regex + ast) ──────────────────
+# ───────── Pattern matchers ───────────────────────────────
 
-# Patterns ordered from most-specific to most-generic. First match wins.
 PATTERNS: list[tuple[str, str, re.Pattern[str]]] = [
     ("jwt", "JWT tokens",
      re.compile(r"\bjwt\b|\btoken\b.*\b(expir|sign|verify)", re.I)),
@@ -269,7 +502,6 @@ PATTERNS: list[tuple[str, str, re.Pattern[str]]] = [
 
 
 def detect_concepts(text: str) -> list[str]:
-    """Return a list of concept keys that appear in the text."""
     hits: list[str] = []
     for key, _, pat in PATTERNS:
         if pat.search(text):
@@ -278,10 +510,7 @@ def detect_concepts(text: str) -> list[str]:
 
 
 def generate_question(text: str, seen_ids: set[str] | None = None) -> Question | None:
-    """Generate a question from streaming text via template matching.
-
-    Returns None if no pattern matches or all matching questions have been asked.
-    """
+    """Pick a question that matches the context and hasn't been seen."""
     seen_ids = seen_ids or set()
     concepts = detect_concepts(text)
     random.shuffle(concepts)
@@ -292,12 +521,10 @@ def generate_question(text: str, seen_ids: set[str] | None = None) -> Question |
         if fresh:
             return random.choice(fresh)
 
-    # Fallback: any concept with fresh questions
     all_concepts = list(TEMPLATE_BANK.keys())
     random.shuffle(all_concepts)
     for concept in all_concepts:
-        candidates = TEMPLATE_BANK[concept]
-        fresh = [q for q in candidates if q.id not in seen_ids]
+        fresh = [q for q in TEMPLATE_BANK[concept] if q.id not in seen_ids]
         if fresh:
             return random.choice(fresh)
 
