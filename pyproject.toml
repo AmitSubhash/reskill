@@ -28,6 +28,10 @@ reskill = "reskill.cli:main"
 Homepage = "https://github.com/AmitSubhash/reskill"
 Repository = "https://github.com/AmitSubhash/reskill"
 
+[tool.setuptools.packages.find]
+include = ["reskill*"]
+exclude = ["archive*"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py310"

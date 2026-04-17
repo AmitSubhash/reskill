@@ -1,314 +1,115 @@
-"""
-CLI entry points for Claude Code hook integration.
+"""reskill CLI.
 
 Usage:
-  reskill start    # Called by PreToolUse hook -- show quiz
-  reskill stop     # Called by PostToolUse hook -- dismiss quiz
-  reskill init     # Called by SessionStart hook -- detect stack, load tips
-  reskill status   # Show current streak/XP/level
-  reskill setup    # Write hooks to ~/.claude/settings.json
-  reskill demo     # Run the interactive demo simulation
+  reskill run <command> [args...]   # wrap a command (e.g. claude) with inline quizzes
+  reskill demo                      # run a demo (simulated claude, inline quizzes)
+  reskill stats                     # show your learning stats
+  reskill question                  # render a sample question (for UI testing)
 """
 
 from __future__ import annotations
 
-import json
 import os
-import signal
 import sys
-from pathlib import Path
 
-from .palette import paint, TEAL, SAGE, ASH, GOLD, VIOLET, BOLD
-from .detect import detect_languages, detect_frameworks, get_quiz_topics, detect_summary
-from .quiz import SessionState, SAMPLE_QUESTIONS, render_quiz, render_answer
-
-PIDFILE = Path("/tmp/.reskill.pid")
-STOPFILE = Path("/tmp/.reskill-stop")
-
-CLAUDE_SETTINGS = Path.home() / ".claude" / "settings.json"
+from .palette import BOLD, DIM, INK, STONE, ASH, DARK_ASH, SAGE, TEAL, GOLD, VIOLET, paint
 
 
-def cmd_setup() -> None:
-    """Write reSkill hooks into Claude Code settings."""
-    reskill_bin = "python3 -m reskill.cli"
-
-    hooks_config = {
-        "PreToolUse": [{
-            "matcher": "",
-            "hooks": [{"type": "command", "command": f"{reskill_bin} start"}],
-        }],
-        "PostToolUse": [{
-            "matcher": "",
-            "hooks": [{"type": "command", "command": f"{reskill_bin} stop"}],
-        }],
-        "Stop": [{
-            "matcher": "",
-            "hooks": [{"type": "command", "command": f"{reskill_bin} stop"}],
-        }],
-    }
-
-    if CLAUDE_SETTINGS.exists():
-        settings = json.loads(CLAUDE_SETTINGS.read_text())
-    else:
-        settings = {}
-
-    existing_hooks = settings.get("hooks", {})
-    # Merge (don't overwrite existing hooks for other events)
-    for event, hook_list in hooks_config.items():
-        existing_hooks[event] = hook_list
-    settings["hooks"] = existing_hooks
-
-    CLAUDE_SETTINGS.parent.mkdir(parents=True, exist_ok=True)
-    CLAUDE_SETTINGS.write_text(json.dumps(settings, indent=2))
-    print(paint("reSkill hooks installed.", SAGE, BOLD))
-    print(paint(f"  Written to {CLAUDE_SETTINGS}", ASH))
-    print(paint("  Restart Claude Code for hooks to take effect.", ASH))
+def cmd_run(argv: list[str]) -> int:
+    from . import wrap
+    return wrap.wrap(argv)
 
 
-def cmd_init() -> None:
-    """Detect project stack and prepare quiz content."""
-    cwd = os.getcwd()
-    summary = detect_summary(cwd)
-    topics = get_quiz_topics(cwd)
-
-    state = SessionState()
-    state.load()
-
-    print(paint("reSkill initialized.", TEAL, BOLD))
-    print(paint(f"  {summary}", ASH))
-    print(paint(f"  Streak: {state.streak} days | Level {state.level} ({state.level_title}) | {state.xp_total} XP", ASH))
-
-    # Write context-aware tips to spinnerTipsOverride
-    tips = _generate_tips(topics)
-    if tips:
-        _update_spinner_tips(tips)
-        print(paint(f"  Loaded {len(tips)} learning tips into spinner.", ASH))
+def cmd_demo() -> int:
+    """Run the interactive inline-quiz demo (no Claude Code required)."""
+    from . import demo as demo_mod
+    demo_mod.run()
+    return 0
 
 
-def cmd_start() -> None:
-    """Show quiz during tool execution. Called by PreToolUse hook."""
-    # Clean up any previous stop signal
-    STOPFILE.unlink(missing_ok=True)
+def cmd_stats() -> int:
+    from . import state as state_mod
+    s = state_mod.load()
 
-    state = SessionState()
-    state.load()
+    HR = "\u2500" * 50
 
-    # Pick a question (simple round-robin for now)
-    q_idx = state.total_today % len(SAMPLE_QUESTIONS)
-    q = SAMPLE_QUESTIONS[q_idx]
+    print()
+    print(f"  {paint('reSkill', TEAL, BOLD)} {paint('stats', ASH)}")
+    print(paint(f"  {HR}", DARK_ASH, DIM))
+    print()
 
-    # Fork to show quiz without blocking the hook
-    pid = os.fork()
-    if pid > 0:
-        # Parent: write pidfile and return (hook completes)
-        PIDFILE.write_text(str(pid))
-        return
+    level_bar_total = 200
+    xp_into_level = s.xp_total - ((s.level - 1) * 200)
+    filled = int(xp_into_level / level_bar_total * 20)
+    empty = 20 - filled
+    bar = paint("\u2588" * filled, TEAL) + paint("\u2591" * empty, DARK_ASH)
 
-    # Child: show interactive quiz
-    os.setsid()
-    try:
-        tty = open("/dev/tty", "r+")
-        os.dup2(tty.fileno(), 0)
-        os.dup2(tty.fileno(), 1)
-        os.dup2(tty.fileno(), 2)
-    except OSError:
-        os._exit(0)
+    print(f"  {paint('level', STONE)}       {paint(str(s.level), VIOLET, BOLD)} {paint('(' + s.level_title + ')', ASH)}")
+    print(f"              {bar} {paint(f'{xp_into_level}/{level_bar_total} xp', ASH)}")
+    print()
+    print(f"  {paint('streak', STONE)}      {paint(f'{s.streak} days', GOLD, BOLD)}  {paint(f'({s.freezes} freezes left)', ASH, DIM)}")
+    print(f"  {paint('today', STONE)}       {paint(f'{s.correct_today}/{s.answered_today} correct', SAGE)}  {paint(f'+{s.xp_today} xp', VIOLET)}")
+    print(f"  {paint('best combo', STONE)}  {paint(f'{s.best_combo}x', GOLD)}")
+    print(f"  {paint('total xp', STONE)}    {paint(str(s.xp_total), ASH)}")
+    print()
 
-    # Enter alternate screen
-    sys.stdout.write("\033[?1049h")
-    sys.stdout.flush()
-
-    import select
-    import termios
-    import tty as tty_mod
-    import itertools
-
-    spinner = itertools.cycle("\u280b\u2819\u2839\u2838\u283c\u2834\u2826\u2827\u2807\u280f")
-    verbs = ["Cogitating", "Ruminating", "Deliberating", "Pondering"]
-
-    # Render quiz
-    quiz_lines = render_quiz(q, state)
-    for line in quiz_lines:
-        print(line)
-
-    # Wait for answer or stop signal
-    fd = sys.stdin.fileno()
-    old_settings = termios.tcgetattr(fd)
-    tty_mod.setraw(fd)
-
-    answer = None
-    start_time = __import__("time").time()
-    try:
-        while not STOPFILE.exists():
-            ready, _, _ = select.select([sys.stdin], [], [], 0.1)
-            if ready:
-                ch = sys.stdin.read(1)
-                valid = [o.label.lower() for o in q.options]
-                if ch.lower() in valid:
-                    answer = ch.upper()
-                    break
-
-            elapsed = __import__("time").time() - start_time
-            remaining = max(0, 30 - elapsed)
-            s = next(spinner)
-            v = verbs[int(elapsed) % len(verbs)]
-            sys.stdout.write(
-                f"\r  {paint(s, TEAL)} {paint(f'{v}...', ASH)}"
-                f"  {paint(f'{remaining:.0f}s', ASH)}"
+    if s.concepts:
+        print(f"  {paint('concepts', STONE)}")
+        for concept, data in sorted(s.concepts.items(), key=lambda kv: -kv[1]["total"])[:10]:
+            pct = data["correct"] / max(1, data["total"]) * 100
+            pct_color = SAGE if pct >= 80 else (GOLD if pct >= 50 else STONE)
+            fill = int(pct / 10)
+            mini_bar = paint("\u2588" * fill, pct_color) + paint("\u2591" * (10 - fill), DARK_ASH)
+            counts = f"({data['correct']}/{data['total']})"
+            print(
+                f"    {paint(concept.ljust(20), INK)} {mini_bar} "
+                f"{paint(f'{pct:.0f}%', pct_color)} "
+                f"{paint(counts, ASH, DIM)}"
             )
-            sys.stdout.flush()
-
-            if elapsed > 30:
-                break
-    finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-
-    # Record answer
-    if answer:
-        correct = answer == q.correct_label
-        xp_earned = state.record_answer(correct, q.xp)
-        answer_lines = render_answer(q, answer, state, xp_earned)
-        sys.stdout.write("\033[2J\033[H")  # clear screen
-        for line in answer_lines:
-            print(line)
-        __import__("time").sleep(1.5)
-    else:
-        state.total_today += 1
-
-    state.save()
-
-    # Leave alternate screen
-    sys.stdout.write("\033[?1049l")
-    sys.stdout.flush()
-
-    os._exit(0)
-
-
-def cmd_stop() -> None:
-    """Dismiss quiz. Called by PostToolUse hook."""
-    STOPFILE.touch()
-    if PIDFILE.exists():
-        try:
-            pid = int(PIDFILE.read_text().strip())
-            os.kill(pid, signal.SIGTERM)
-        except (ProcessLookupError, ValueError):
-            pass
-        PIDFILE.unlink(missing_ok=True)
-    STOPFILE.unlink(missing_ok=True)
-
-
-def cmd_status() -> None:
-    """Show current gamification state."""
-    state = SessionState()
-    state.load()
-
     print()
-    print(paint("  reSkill Status", TEAL, BOLD))
-    print(paint(f"  {'─' * 40}", ASH))
-    print(f"  {paint('Streak:', STONE)} {paint(f'{state.streak} days', GOLD, BOLD)}")
-    print(f"  {paint('Level:', STONE)} {paint(f'{state.level} ({state.level_title})', VIOLET)}")
-    print(f"  {paint('XP:', STONE)} {paint(f'{state.xp_total} total, {state.xp_today} today', ASH)}")
-    print(f"  {paint('Today:', STONE)} {paint(f'{state.correct_today}/{state.total_today} correct', SAGE)}")
-    print(f"  {paint('Best combo:', STONE)} {paint(f'{state.best_combo}x', GOLD)}")
-    print(f"  {paint('Freezes:', STONE)} {paint(f'{state.freezes} remaining', ASH)}")
-    print()
-
-    # Mini heatmap placeholder
-    cwd = os.getcwd()
-    summary = detect_summary(cwd)
-    if summary:
-        print(paint(f"  Project: {summary}", ASH))
-    print()
+    return 0
 
 
-def _generate_tips(topics: list[str]) -> list[str]:
-    """Generate learning tips for spinnerTipsOverride."""
-    tip_bank: dict[str, list[str]] = {
-        "python": [
-            "Python: list.copy() is shallow. Use copy.deepcopy() for nested structures.",
-            "Python: Use enumerate() instead of range(len()) for cleaner loops.",
-            "Python: f-strings are faster than .format() and % formatting.",
-            "Python: defaultdict(list) avoids KeyError when appending to dict values.",
-            "Python: := (walrus operator) assigns and returns in one expression.",
-        ],
-        "git": [
-            "Git: git stash -u includes untracked files. git stash only gets tracked.",
-            "Git: git rebase -i lets you squash, reorder, and edit commits.",
-            "Git: git bisect uses binary search to find the commit that introduced a bug.",
-            "Git: git reflog shows ALL ref changes, even after reset --hard.",
-        ],
-        "fastapi": [
-            "FastAPI: Use Depends() for dependency injection. It's testable and composable.",
-            "FastAPI: BackgroundTasks run after the response is sent. Use for emails, logs.",
-            "FastAPI: Path parameters are required. Query parameters are optional by default.",
-        ],
-        "react": [
-            "React: useMemo() caches computed values. useCallback() caches functions.",
-            "React: Keys should be stable IDs, not array indices (unless list is static).",
-            "React: useEffect cleanup runs before re-run AND on unmount.",
-        ],
-        "algorithms": [
-            "Big-O: O(log n) means halving the problem each step (binary search).",
-            "Big-O: O(n log n) is the theoretical minimum for comparison-based sorting.",
-            "Data structures: HashMap average O(1) lookup, worst case O(n) with collisions.",
-        ],
-        "http-status": [
-            "HTTP: 200 OK, 201 Created, 204 No Content, 301 Moved, 400 Bad Request.",
-            "HTTP: 401 Unauthorized means not authenticated. 403 Forbidden means not authorized.",
-            "HTTP: 429 Too Many Requests. Include Retry-After header in the response.",
-        ],
-    }
+def cmd_question() -> int:
+    """Render a sample question for testing."""
+    from .question import TEMPLATE_BANK
+    from .inline_box import render_question, render_answer_reveal
 
-    tips: list[str] = []
-    for topic in topics:
-        if topic in tip_bank:
-            tips.extend(tip_bank[topic])
-
-    return tips[:20]  # Cap at 20 tips
+    # Pick one question from each concept
+    for concept, questions in list(TEMPLATE_BANK.items())[:3]:
+        q = questions[0]
+        sys.stdout.write(render_question(q, streak=7))
+        sys.stdout.write(render_answer_reveal(q, q.correct_label, 50))
+    return 0
 
 
-def _update_spinner_tips(tips: list[str]) -> None:
-    """Write tips to Claude Code's spinnerTipsOverride setting."""
-    if not CLAUDE_SETTINGS.exists():
-        return
-
-    try:
-        settings = json.loads(CLAUDE_SETTINGS.read_text())
-        settings["spinnerTipsOverride"] = {
-            "excludeDefault": False,
-            "tips": tips,
-        }
-        CLAUDE_SETTINGS.write_text(json.dumps(settings, indent=2))
-    except (json.JSONDecodeError, OSError):
-        pass
+def cmd_help() -> int:
+    print(__doc__)
+    return 0
 
 
-STONE = __import__("reskill.palette", fromlist=["STONE"]).STONE
+def main(argv: list[str] | None = None) -> int:
+    argv = argv or sys.argv[1:]
+    if not argv:
+        return cmd_help()
 
+    cmd = argv[0]
+    rest = argv[1:]
 
-def main() -> None:
-    if len(sys.argv) < 2:
-        print("Usage: reskill <start|stop|init|status|setup|demo>")
-        sys.exit(1)
+    if cmd in ("-h", "--help", "help"):
+        return cmd_help()
+    if cmd == "run":
+        return cmd_run(rest)
+    if cmd == "demo":
+        return cmd_demo()
+    if cmd == "stats":
+        return cmd_stats()
+    if cmd == "question":
+        return cmd_question()
 
-    cmd = sys.argv[1]
-    if cmd == "start":
-        cmd_start()
-    elif cmd == "stop":
-        cmd_stop()
-    elif cmd == "init":
-        cmd_init()
-    elif cmd == "status":
-        cmd_status()
-    elif cmd == "setup":
-        cmd_setup()
-    elif cmd == "demo":
-        from .quiz_demo import run
-        run()
-    else:
-        print(f"Unknown command: {cmd}")
-        sys.exit(1)
+    print(f"reskill: unknown command '{cmd}'", file=sys.stderr)
+    return cmd_help()
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

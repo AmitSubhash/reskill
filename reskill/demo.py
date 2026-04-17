@@ -1,203 +1,324 @@
-"""Full Claude Code session simulation with ad boxes."""
+"""Interactive demo: simulates a Claude Code session with inline quizzes.
+
+This lets you experience the product without needing Claude Code installed.
+The demo streams fake Claude output, shows a quiz during each 'thinking'
+phase, captures your keypress, and continues.
+
+For wrapping real Claude Code, see reskill.wrap.
+"""
 
 from __future__ import annotations
 
+import itertools
 import os
+import random
+import select
+import sys
+import termios
 import time
+import tty
 
+from .inline_box import render_answer_reveal, render_question
 from .palette import (
-    BOLD, DIM, DARK_ASH, INK, ASH, STONE, TEAL, SAGE, GOLD,
+    BOLD,
+    DIM,
+    DARK_ASH,
+    GOLD,
+    INK,
+    SAGE,
+    STONE,
+    TEAL,
+    VIOLET,
+    ASH,
     paint,
 )
-from .panel import render_panel, TERM_W
-from .spinner import show_thinking
-from .ads import ONELINERS, CARDS
+from .panel import visible_len
+from .question import Question, generate_question
+from . import state as state_mod
 
 
-# ── Helpers ──────────────────────────────────────────────────
+HR = "\u2500" * 60
+SPINNER = list("\u280b\u2819\u2839\u2838\u283c\u2834\u2826\u2827\u2807\u280f")
 
 
-def user_prompt(text: str) -> None:
+# ── Scenario script ─────────────────────────────────────────
+
+SCENARIOS = [
+    {
+        "user": "add error handling to the JWT validation in src/auth.py",
+        "context_hint": "jwt error handling try except",
+        "thinking_seconds": 6.0,
+        "tools": [("Read", "src/auth.py")],
+        "response": (
+            "\n  I'll add error handling to the JWT validation. Looking at "
+            "the current code, expired tokens aren't being caught properly -- "
+            "they return a 500 instead of 401.\n\n"
+            "  I'll wrap the decode call in a try/except block and catch "
+            "specific exceptions instead of using a bare except clause, which "
+            "would also catch KeyboardInterrupt.\n\n"
+            "  Here's the fix:\n"
+        ),
+        "code": (
+            "try:\n"
+            "    payload = jwt.decode(token, SECRET, algorithms=['HS256'])\n"
+            "except jwt.ExpiredSignatureError:\n"
+            "    raise HTTPException(401, detail='Token expired')\n"
+            "except jwt.InvalidTokenError:\n"
+            "    raise HTTPException(401, detail='Invalid token')"
+        ),
+        "after_tools": [("Edit", "src/auth.py")],
+        "after_done": ["Applied edit to src/auth.py"],
+    },
+    {
+        "user": "memoize the expensive lookup in helpers.py with lru_cache",
+        "context_hint": "lru_cache memoization",
+        "thinking_seconds": 5.0,
+        "tools": [("Read", "src/helpers.py")],
+        "response": (
+            "\n  I'll add @lru_cache to the lookup. Repeated calls with "
+            "the same email will return instantly from cache.\n\n"
+            "  Using maxsize=128 keeps memory bounded -- the least "
+            "recently used entry is evicted once the cache fills up.\n"
+        ),
+        "code": (
+            "from functools import lru_cache\n\n"
+            "@lru_cache(maxsize=128)\n"
+            "def get_user_by_email(email: str) -> User | None:\n"
+            "    return db.query(User).filter_by(email=email).first()"
+        ),
+        "after_tools": [("Edit", "src/helpers.py")],
+        "after_done": ["Applied edit to src/helpers.py"],
+    },
+    {
+        "user": "what status code should I return for POST /users?",
+        "context_hint": "HTTP POST creates a resource 201 Created",
+        "thinking_seconds": 4.0,
+        "tools": [],
+        "response": (
+            "\n  Return `201 Created` for a successful POST that creates a "
+            "new resource. Include the created resource in the body and a "
+            "`Location` header pointing to its URL.\n\n"
+            "  `200 OK` works but is less precise. `204 No Content` is for "
+            "successful operations with no body (like DELETE).\n"
+        ),
+        "code": None,
+        "after_tools": [],
+        "after_done": [],
+    },
+]
+
+
+# ── Terminal I/O helpers ───────────────────────────────────
+
+
+def _stdout_write(s: str) -> None:
+    sys.stdout.write(s)
+    sys.stdout.flush()
+
+
+def _read_answer(
+    q: Question, timeout: float, state: state_mod.State
+) -> tuple[str | None, int]:
+    """Wait for 1/2/3/4 or ESC or timeout. Returns (label_or_None, xp).
+
+    If the timeout elapses before the user answers, the quiz is treated as
+    skipped.
+    """
+    fd = sys.stdin.fileno()
+    saved = termios.tcgetattr(fd)
+    tty.setraw(fd)
+    try:
+        deadline = time.time() + timeout
+        while True:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                state_mod.record_skip(state, q.concept)
+                return None, 0
+            r, _, _ = select.select([sys.stdin], [], [], min(0.25, remaining))
+            if r:
+                ch = os.read(fd, 1)
+                if ch in (b"1", b"2", b"3", b"4"):
+                    label = ch.decode()
+                    correct = label == q.correct_label
+                    xp = state_mod.record_answer(
+                        state, q.id, q.concept, correct
+                    )
+                    return label, xp
+                if ch == b"\x1b":
+                    state_mod.record_skip(state, q.concept)
+                    return None, 0
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, saved)
+
+
+def _thinking_spinner_until(deadline: float) -> None:
+    """Animate a spinner until `deadline`. Same line, no scrolling."""
+    spinner = itertools.cycle(SPINNER)
+    verbs = ["Thinking", "Cogitating", "Pondering", "Ruminating"]
+    start = time.time()
+    while time.time() < deadline:
+        s = next(spinner)
+        v = verbs[int(time.time() - start) % len(verbs)]
+        _stdout_write(f"\r  {paint(s, TEAL)} {paint(v + '...', ASH)}")
+        time.sleep(0.08)
+    _stdout_write("\r" + " " * 40 + "\r")
+
+
+def _stream_text(text: str, wpm: int = 650) -> None:
+    base = 60.0 / (wpm * 5)
+    for ch in text:
+        sys.stdout.write(ch)
+        sys.stdout.flush()
+        time.sleep(base * random.uniform(0.3, 1.6))
+
+
+def _tool_call(name: str, arg: str) -> None:
     print()
-    print(f"  {paint(chr(0x276f), SAGE, BOLD)} {paint(text, INK, BOLD)}")
+    print(f"  {paint('*', GOLD)} {paint(name, GOLD, BOLD)} {paint(arg, ASH)}")
+    time.sleep(0.4)
 
 
-def tool_call(name: str, arg: str = "") -> None:
-    print(f"  {paint(chr(0x2699), GOLD)} {paint(name, GOLD, BOLD)} {paint(arg, ASH)}")
-
-
-def success(text: str) -> None:
+def _done(text: str) -> None:
     print(f"  {paint(chr(0x2713), SAGE, BOLD)} {paint(text, ASH)}")
 
 
-def assistant_text(text: str) -> None:
+def _code_block(code: str) -> None:
     print()
-    for line in text.split("\n"):
-        print(f"  {paint(line, INK)}")
-
-
-def code_block(code: str, lang: str = "python") -> None:
-    lines: list[str] = []
-    for i, line in enumerate(code.strip().split("\n"), 1):
-        num = paint(f"{i:>3} ", DARK_ASH)
-        lines.append(num + paint(line, INK))
-
-    panel_lines = render_panel(
-        paint(f"  {lang}", STONE),
-        lines,
-        border_color=STONE,
-        title_color=STONE,
-    )
-    print()
-    for line in panel_lines:
-        print(line)
-
-
-def test_output(passed: int, failed: int = 0, duration: float = 0.34) -> None:
-    lines: list[str] = []
-    for i in range(passed):
-        lines.append(
-            paint(f"  tests/test_api.py::test_{i + 1} ", INK)
-            + paint("PASSED", SAGE, BOLD)
+    inner_width = 58
+    top = "\u250c" + "\u2500" * inner_width + "\u2510"
+    bot = "\u2514" + "\u2500" * inner_width + "\u2518"
+    print(paint(f"  {top}", STONE, DIM))
+    for line in code.strip("\n").split("\n"):
+        padded = line + " " * max(0, inner_width - len(line))
+        print(
+            paint("  \u2502", STONE, DIM)
+            + paint(padded, TEAL)
+            + paint("\u2502", STONE, DIM)
         )
-    lines.append("")
-    summary = paint(f"  {passed} passed", SAGE, BOLD)
-    if failed:
-        summary += paint(f", {failed} failed", STONE, BOLD)
-    summary += paint(f" in {duration}s", ASH)
-    lines.append(summary)
+    print(paint(f"  {bot}", STONE, DIM))
 
-    border = SAGE if not failed else STONE
-    panel_lines = render_panel(
-        paint("  output", STONE),
-        lines,
-        border_color=border,
-        title_color=border,
-    )
+
+def _banner(state: state_mod.State) -> None:
     print()
-    for line in panel_lines:
-        print(line)
+    title = paint("claude", TEAL, BOLD) + "  " + paint("sonnet 4.6", DARK_ASH)
+    streak = ""
+    if state.streak > 0:
+        streak = "  " + paint(f"reskill: day {state.streak}", GOLD, DIM)
+    print(f"  {title}{streak}")
+    print(paint(f"  {HR}", DARK_ASH, DIM))
 
 
-# ── Main session ─────────────────────────────────────────────
+def _user_prompt(text: str) -> None:
+    print()
+    prefix = paint(">", SAGE, BOLD)
+    # Type the prompt character by character for realism
+    sys.stdout.write(f"  {prefix} ")
+    sys.stdout.flush()
+    for ch in text:
+        sys.stdout.write(paint(ch, INK, BOLD))
+        sys.stdout.flush()
+        time.sleep(random.uniform(0.015, 0.045))
+    sys.stdout.write("\n")
+
+
+def _end_of_turn_footer(state: state_mod.State) -> None:
+    """Tiny footer after each response showing reskill progress."""
+    if state.answered_today == 0:
+        return
+    score = f"{state.correct_today}/{state.answered_today}"
+    xp = f"+{state.xp_today} xp"
+    combo = f"{state.combo}x combo" if state.combo >= 2 else ""
+    parts = [
+        paint("reskill", TEAL, DIM),
+        paint(score, SAGE, DIM),
+        paint(xp, VIOLET, DIM),
+    ]
+    if combo:
+        parts.append(paint(combo, GOLD, DIM))
+    print()
+    print("  " + paint(" | ", DARK_ASH, DIM).join(parts))
+
+
+# ── Main demo loop ─────────────────────────────────────────
 
 
 def run() -> None:
+    state = state_mod.load()
+
     os.system("clear")
+    _banner(state)
+    time.sleep(0.6)
 
-    # Header
+    for scenario in SCENARIOS:
+        _user_prompt(scenario["user"])
+        time.sleep(0.4)
+
+        # --- Thinking phase: quiz appears HERE, while Claude thinks ---
+        thinking_deadline = time.time() + scenario["thinking_seconds"]
+
+        seen = set(state.seen_questions)
+        q = generate_question(scenario["context_hint"], seen_ids=seen)
+
+        if q is not None:
+            # Show spinner briefly so the user sees Claude started thinking,
+            # then pop the quiz inline.
+            brief = time.time() + 0.8
+            _thinking_spinner_until(brief)
+
+            _stdout_write(render_question(q, streak=state.streak))
+
+            # User has until thinking_deadline to answer
+            answer_timeout = max(1.0, thinking_deadline - time.time())
+            label, xp = _read_answer(q, answer_timeout, state)
+            state_mod.save(state)
+
+            _stdout_write(render_answer_reveal(q, label, xp))
+
+            # If Claude is still "thinking", keep the spinner going
+            remaining = thinking_deadline - time.time()
+            if remaining > 0:
+                _thinking_spinner_until(thinking_deadline)
+        else:
+            # No question matched; just spin through the thinking phase
+            _thinking_spinner_until(thinking_deadline)
+
+        # --- Claude's response ---
+        for tool in scenario["tools"]:
+            _tool_call(tool[0], tool[1])
+            time.sleep(0.3)
+
+        _stream_text(scenario["response"])
+
+        if scenario["code"]:
+            _code_block(scenario["code"])
+
+        for tool in scenario["after_tools"]:
+            _tool_call(tool[0], tool[1])
+            time.sleep(0.2)
+        for msg in scenario["after_done"]:
+            _done(msg)
+            time.sleep(0.2)
+
+        _end_of_turn_footer(state)
+        time.sleep(1.2)
+
     print()
-    hr = chr(0x2500) * (TERM_W - 4)
-    print(f"  {paint('claude code', TEAL, BOLD)}  {paint('v2.1.88', DARK_ASH)}")
-    print(paint(f"  {hr}", DARK_ASH, DIM))
+    print(paint(f"  {HR}", DARK_ASH, DIM))
     print()
-    time.sleep(0.8)
-
-    # ── Turn 1 ───────────────────────────────────────────────
-    user_prompt("add a /health endpoint to the FastAPI app")
-    time.sleep(0.4)
-
-    show_thinking(3.0, ad=ONELINERS[0])
-
-    tool_call("Read", "src/main.py")
-    time.sleep(0.3)
-    assistant_text("I'll add a health check endpoint to your FastAPI app.")
-
-    code_block('''@app.get("/health")
-async def health_check() -> dict[str, str]:
-    """Health check endpoint for load balancer."""
-    return {"status": "ok", "version": app.version}''')
-
-    tool_call("Edit", "src/main.py")
-    time.sleep(0.2)
-    success("Applied edit to src/main.py")
-    time.sleep(1.5)
-
-    # ── Turn 2 ───────────────────────────────────────────────
-    user_prompt("write tests for it")
-    time.sleep(0.4)
-
-    show_thinking(4.5, ad=CARDS[0])
-
-    tool_call("Read", "tests/test_api.py")
-    time.sleep(0.2)
-    assistant_text("Added tests for the health endpoint:")
-
-    code_block('''@pytest.mark.asyncio
-async def test_health_returns_ok(client: AsyncClient):
-    resp = await client.get("/health")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["status"] == "ok"
-    assert "version" in data
-
-@pytest.mark.asyncio
-async def test_health_is_fast(client: AsyncClient):
-    """Health check should respond under 50ms."""
-    start = time.monotonic()
-    await client.get("/health")
-    assert time.monotonic() - start < 0.05''')
-
-    tool_call("Edit", "tests/test_api.py")
-    time.sleep(0.2)
-    success("Applied edit to tests/test_api.py")
-    time.sleep(1.5)
-
-    # ── Turn 3 ───────────────────────────────────────────────
-    user_prompt("run the tests")
-    time.sleep(0.4)
-
-    show_thinking(3.0, ad=ONELINERS[1])
-
-    tool_call("Bash", "pytest tests/test_api.py -v")
-    time.sleep(0.4)
-    test_output(passed=2, duration=0.34)
-    assistant_text("Both tests pass. The health endpoint is working and responds quickly.")
-    time.sleep(1.5)
-
-    # ── Turn 4 ───────────────────────────────────────────────
-    user_prompt("now add rate limiting to it, 100 req/min per IP")
-    time.sleep(0.4)
-
-    show_thinking(5.0, ad=CARDS[1])
-
-    tool_call("Read", "src/main.py")
-    time.sleep(0.2)
-    tool_call("Read", "pyproject.toml")
-    time.sleep(0.2)
-    assistant_text("I'll add IP-based rate limiting using slowapi:")
-
-    code_block('''from slowapi import Limiter
-from slowapi.util import get_remote_address
-
-limiter = Limiter(key_func=get_remote_address)
-app.state.limiter = limiter
-
-@app.get("/health")
-@limiter.limit("100/minute")
-async def health_check(request: Request) -> dict[str, str]:
-    return {"status": "ok", "version": app.version}''')
-
-    tool_call("Edit", "src/main.py")
-    time.sleep(0.2)
-    success("Applied edit to src/main.py")
-    tool_call("Bash", "pip install slowapi")
-    time.sleep(0.3)
-    success("Installed slowapi")
-    time.sleep(1.0)
-
-    # ── Footer ───────────────────────────────────────────────
+    print(
+        "  "
+        + paint("session ended", ASH)
+        + "  "
+        + paint("|", DARK_ASH, DIM)
+        + "  "
+        + paint(f"+{state.xp_today} xp today", VIOLET)
+        + "  "
+        + paint("|", DARK_ASH, DIM)
+        + "  "
+        + paint(f"level {state.level}", TEAL)
+    )
     print()
-    print(paint(f"  {hr}", DARK_ASH, DIM))
-    print()
-    print(paint("  end of simulation", TEAL, BOLD))
-    print()
-    print(paint("  Design notes:", STONE))
-    print(paint("  . Ads appear only during thinking, disappear on response", ASH))
-    print(paint("  . Feynman Everforest palette: warm, muted, non-intrusive", ASH))
-    print(paint("  . One-liners for short thinks, cards for longer thinks", ASH))
-    print(paint("  . Borders dim dark ash, content warm ink", ASH))
-    print(paint("  . Ad clears itself via ANSI cursor: zero residue", ASH))
+    print(paint("  run `reskill stats` to see your growth", ASH, DIM))
     print()
 
 
