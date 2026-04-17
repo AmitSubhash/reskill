@@ -179,10 +179,16 @@ def render_quiz(q: QuizQuestion, state: SessionState) -> list[str]:
         + paint(f"    +{q.xp} XP", VIOLET)
     )
 
-    # Build title
+    # Build title -- never say "quiz", frame as discovery
     lang_label = q.language.title()
     progress = state.daily_progress_str
-    title = f"{lang_label} Quiz"
+    format_labels = {
+        "what_is_output": "Think about this",
+        "spot_the_bug": "Spot the bug",
+        "multiple_choice": "Quick question",
+        "true_false": "True or false?",
+    }
+    title = f"{lang_label} \u2022 {format_labels.get(q.format, 'Think about this')}"
     subtitle = f"{progress} today"
     if state.combo >= 2:
         subtitle += f"  {state.combo}x combo"
@@ -231,20 +237,22 @@ def render_answer(
             )
     lines.append("")
 
-    # Explanation
+    # Explanation -- frame as discovery, normalize not knowing
+    if not correct:
+        lines.append(paint("  Interesting -- most developers get this one wrong.", STONE))
     for expl_line in q.explanation.split("\n"):
         lines.append(paint(f"  {expl_line}", STONE))
     lines.append("")
 
-    # Title
+    # Title -- never say "wrong" or "incorrect"
     if correct:
-        title = paint("Correct!", SAGE, BOLD)
+        title = paint("Exactly right", SAGE, BOLD)
         xp_text = f"+{xp_earned} XP"
         if state.combo >= 2:
-            xp_text += f" ({state.combo}x combo!)"
+            xp_text += f" ({state.combo}x streak)"
     else:
-        title = paint("Not quite", ROSE)
-        xp_text = ""
+        title = paint("Good to know", GOLD)
+        xp_text = "noted for review"
 
     return render_panel(
         title,

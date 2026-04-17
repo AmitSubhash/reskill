@@ -72,7 +72,7 @@ def render_til(card: TilCard) -> list[str]:
         lines.append("")
 
     return render_panel(
-        f"{card.language} \u2022 TIL",
+        f"{card.language} \u2022 Did you know?",
         lines,
         border_color=DARK_ASH,
         title_color=GOLD,
