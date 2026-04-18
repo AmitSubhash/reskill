@@ -21,14 +21,19 @@ sleep 0.5
 tmux split-window -h -l 52 -t "$SESSION:0.0" "reskill quiz-panel"
 sleep 3
 
-# With no thinking flag, quiz pane should show "waiting for claude".
+# With no thinking flag AND no recent transcript activity, quiz pane
+# should show "waiting for claude". Skipped when other Claude sessions
+# are also writing to ~/.claude/projects in the background -- that's
+# the transcript-polling fallback doing its job.
 rm -f ~/.reskill/state/thinking
-sleep 1.5
+sleep 4   # wait past TRANSCRIPT_FRESH_SECONDS
 IDLE=$(tmux capture-pane -t "$SESSION:0.1" -p)
 if echo "$IDLE" | grep -q "waiting for claude"; then
   pass "quiz pane shows idle card when no thinking flag"
+elif echo "$IDLE" | grep -q "think about this"; then
+  echo "SKIP: another Claude session is active, transcript poll fired"
 else
-  fail "idle card not visible; got:"; echo "$IDLE" | head -10
+  fail "neither idle card nor question visible; got:"; echo "$IDLE" | head -10
 fi
 
 # Now signal thinking; quiz pane should render a question.
