@@ -1,23 +1,19 @@
 """PTY wrapper that runs a child process (like claude) with inline quizzes.
 
-UX philosophy: the quiz appears WHILE the model is thinking, not after.
+Behavior rules:
+  * While the child is in a "thinking" state (spinner dominates output),
+    we inject quizzes back-to-back with a short cooldown.
+  * While the user is mid-answer, non-spinner output from the child is
+    BUFFERED -- we don't interleave Claude's response with the quiz box.
+    As soon as the user answers (or skips), we flush the buffer.
+  * When the child shows a permission prompt ("Do you want to proceed?"
+    with numbered options), we ENTIRELY suppress quiz injection until
+    the prompt is resolved. Otherwise the user's 1/2/3 answer would go
+    to the wrong thing.
 
-Trigger strategy:
-  1. Detect that the user has submitted a prompt (Enter on a non-empty line).
-  2. Start a "thinking window": let the child print its spinner briefly.
-  3. If the child is still producing low-content output (spinner frames),
-     that's our chance to inject the quiz box inline.
-  4. The user answers (or skips) while the model keeps thinking in the
-     background. When the model's real content starts flowing, we have
-     already shown the answer reveal and we stay out of the way.
-
-Spinner/low-content detection:
-  Claude Code's spinner emits braille dots (⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏) plus a verb.
-  These repaints contain lots of ANSI control sequences but very few
-  "new textual characters" (after we strip ANSI and dedupe repeated runs).
-  If we see sustained output with low NEW-content ratio, we're in thinking.
-
-The same logic works for the simulator which emits the same braille frames.
+The wrapper is transparent: every byte of child output reaches the terminal
+in order, and every user keystroke (except those consumed by an active
+quiz) reaches the child.
 """
 
 from __future__ import annotations
@@ -35,31 +31,49 @@ import time
 import tty
 from dataclasses import dataclass
 
-from .inline_box import render_question, render_answer_reveal
+from .inline_box import render_answer_reveal, render_question
 from .question import Question, generate_question
 from . import state as state_mod
 
 
-# Strip ANSI escapes to measure "content bytes" vs spinner churn
+# ANSI escape / OSC stripper
 _ANSI_RE = re.compile(rb"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\].*?(?:\x07|\x1b\\)", re.DOTALL)
 
-# Braille spinner characters Claude Code / the simulator emit during thinking
+# Braille spinner frames Claude Code emits while thinking
 _SPINNER_BYTES = {
     c.encode("utf-8")
     for c in "\u280b\u2819\u2839\u2838\u283c\u2834\u2826\u2827\u2807\u280f"
 }
 
+# Permission prompt detection patterns
+_PERMISSION_MARKERS = [
+    re.compile(rb"do you want to proceed", re.I),
+    re.compile(rb"do you want to continue", re.I),
+    re.compile(rb"\(y/n\)|\(y/N\)|\(Y/n\)", re.I),
+    re.compile(rb"1\.\s*yes", re.I),
+    re.compile(rb"press\s+\d\s+to", re.I),
+]
+
+# When we see these, the permission prompt has been resolved
+_PERMISSION_RESOLVED_MARKERS = [
+    re.compile(rb"proceeding", re.I),
+    re.compile(rb"permission denied", re.I),
+    re.compile(rb"cancelled", re.I),
+]
+
 
 @dataclass
 class Config:
-    # How long after the user submits before we try to pop a quiz
-    submit_to_quiz_ms: int = 250
-    # Minimum time between consecutive quizzes
-    min_seconds_between_quizzes: float = 8.0
-    # How long the reveal stays before we remove the block flag
-    reveal_duration_ms: int = 3500
-    # Minimum chars typed before Enter counts as "submitted a prompt"
+    # Brief warm-up before the first quiz so the user sees Claude started
+    submit_to_quiz_ms: int = 300
+    # Cooldown between consecutive quizzes within the same thinking window
+    min_seconds_between_quizzes: float = 2.5
+    # How long the answer reveal stays before we consider the next quiz
+    reveal_duration_ms: int = 3000
+    # Minimum chars typed before Enter counts as a prompt submission
     min_prompt_chars: int = 6
+    # How long after seeing a permission prompt to stay suppressed
+    permission_cooldown_ms: int = 8000
 
 
 def _set_raw() -> list[int]:
@@ -90,15 +104,22 @@ def _set_winsize(fd: int, rows: int, cols: int) -> None:
 
 
 def _looks_like_spinner(data: bytes) -> bool:
-    """True if `data` is mostly spinner frames and redraw escapes."""
+    """True if `data` is mostly spinner frames (low content churn)."""
     has_spinner = any(s in data for s in _SPINNER_BYTES)
     stripped = _ANSI_RE.sub(b"", data)
-    # Few visible chars and contains a spinner glyph
     return has_spinner and len(stripped) < 80
 
 
+def _detect_permission_prompt(recent_text: bytes) -> bool:
+    """Check the recent output for hints of an interactive permission prompt."""
+    return any(pat.search(recent_text) for pat in _PERMISSION_MARKERS)
+
+
+def _detect_permission_resolved(recent_text: bytes) -> bool:
+    return any(pat.search(recent_text) for pat in _PERMISSION_RESOLVED_MARKERS)
+
+
 def _build_context_window(buffer: bytearray, limit: int = 2000) -> str:
-    """Build a text window for template matching from the recent buffer."""
     recent = bytes(buffer[-limit:])
     return recent.decode("utf-8", errors="ignore")
 
@@ -110,7 +131,6 @@ def wrap(argv: list[str]) -> int:
 
     pid, master = pty.fork()
     if pid == 0:
-        # Child
         os.execvp(argv[0], argv)
         os._exit(1)
 
@@ -130,26 +150,35 @@ def wrap(argv: list[str]) -> int:
     cfg = Config()
     state = state_mod.load()
 
-    content_buffer = bytearray()   # stripped text only, for question gen
+    content_buffer = bytearray()   # stripped text for question gen
+    recent_raw = bytearray()       # raw recent output for permission detection
 
-    # User-input state: are they typing a prompt?
-    typed_chars: int = 0           # chars typed since last Enter
-    prompt_submitted_at: float = 0  # time the user submitted a prompt
+    # User typing state
+    typed_chars: int = 0
+    prompt_submitted_at: float = 0  # timestamp, 0 == not currently thinking
 
     # Quiz state
     pending_q: Question | None = None
     awaiting_answer = False
     last_quiz_at: float = 0.0
-    suppress_until: float = 0.0    # don't pop a quiz until this time
+    reveal_until: float = 0.0      # during this window don't show another quiz
+    suppress_quizzes_until: float = 0.0  # permission prompt cooldown
+
+    # Output buffering while a quiz is on screen
+    pending_output = bytearray()
 
     exit_status = 0
 
+    def flush_pending_output() -> None:
+        if pending_output:
+            os.write(sys.stdout.fileno(), bytes(pending_output))
+            pending_output.clear()
+
     try:
         while True:
-            # Remove suppress when reveal elapsed
             now = time.time()
-            if suppress_until and now > suppress_until:
-                suppress_until = 0.0
+            if reveal_until and now > reveal_until:
+                reveal_until = 0.0
 
             r, _, _ = select.select([sys.stdin, master], [], [], 0.05)
 
@@ -161,26 +190,48 @@ def wrap(argv: list[str]) -> int:
                 if not data:
                     break
 
-                # Always forward to the terminal
-                os.write(sys.stdout.fileno(), data)
+                # Keep a rolling window of raw output for permission detection
+                recent_raw.extend(data)
+                if len(recent_raw) > 4000:
+                    del recent_raw[:-2000]
 
-                # Accumulate stripped content
+                # Detect permission prompt
+                if _detect_permission_prompt(bytes(recent_raw[-2000:])):
+                    suppress_quizzes_until = now + cfg.permission_cooldown_ms / 1000.0
+                    # If a quiz is live, abort it so keys reach Claude
+                    if awaiting_answer and pending_q is not None:
+                        state_mod.record_skip(state, pending_q.concept)
+                        state_mod.save(state)
+                        pending_q = None
+                        awaiting_answer = False
+                        flush_pending_output()
+                elif _detect_permission_resolved(bytes(recent_raw[-2000:])):
+                    suppress_quizzes_until = min(
+                        suppress_quizzes_until, now + 0.5
+                    )
+
+                # If we're waiting for an answer, buffer real content
+                # (let spinner frames through to the user still sees Claude alive)
+                if awaiting_answer and not _looks_like_spinner(data):
+                    pending_output.extend(data)
+                else:
+                    os.write(sys.stdout.fileno(), data)
+
+                # Accumulate stripped content for question generation
                 stripped = _ANSI_RE.sub(b"", data)
                 content_buffer.extend(stripped)
-
-                # Trim buffer
                 if len(content_buffer) > 20000:
                     del content_buffer[:-10000]
 
-                # If we saw a user submission recently AND this chunk is
-                # spinner-like, this is the moment to inject a quiz.
-                now = time.time()
+                # Quiz trigger: in a thinking window, not in permission,
+                # not mid-quiz, not in reveal cooldown
                 if (
                     prompt_submitted_at > 0
                     and (now - prompt_submitted_at) * 1000 > cfg.submit_to_quiz_ms
-                    and (now - last_quiz_at) > cfg.min_seconds_between_quizzes
+                    and now > suppress_quizzes_until
                     and not awaiting_answer
-                    and not suppress_until
+                    and now > reveal_until
+                    and (now - last_quiz_at) > cfg.min_seconds_between_quizzes
                     and _looks_like_spinner(data)
                 ):
                     window = _build_context_window(content_buffer)
@@ -190,12 +241,10 @@ def wrap(argv: list[str]) -> int:
                         pending_q = q
                         awaiting_answer = True
                         last_quiz_at = now
-                        # Clear the spinner line so the box sits cleanly
+                        # Clear the current spinner line so the box sits cleanly
                         os.write(sys.stdout.fileno(), b"\r\x1b[2K")
                         rendered = render_question(q, streak=state.streak)
                         os.write(sys.stdout.fileno(), rendered.encode())
-                        # Don't re-pop while answering this one
-                        prompt_submitted_at = 0
 
             if sys.stdin in r:
                 try:
@@ -205,7 +254,7 @@ def wrap(argv: list[str]) -> int:
                 if not data:
                     break
 
-                # If a quiz is showing, intercept answer keys
+                # If a quiz is active, intercept answer keys
                 if awaiting_answer and pending_q is not None:
                     ch = data[:1]
                     consumed = False
@@ -220,7 +269,8 @@ def wrap(argv: list[str]) -> int:
                         os.write(sys.stdout.fileno(), rendered.encode())
                         pending_q = None
                         awaiting_answer = False
-                        suppress_until = time.time() + cfg.reveal_duration_ms / 1000.0
+                        reveal_until = time.time() + cfg.reveal_duration_ms / 1000.0
+                        flush_pending_output()
                         consumed = True
                     elif ch == b"\x1b":
                         state_mod.record_skip(state, pending_q.concept)
@@ -229,7 +279,8 @@ def wrap(argv: list[str]) -> int:
                         os.write(sys.stdout.fileno(), rendered.encode())
                         pending_q = None
                         awaiting_answer = False
-                        suppress_until = time.time() + cfg.reveal_duration_ms / 1000.0
+                        reveal_until = time.time() + cfg.reveal_duration_ms / 1000.0
+                        flush_pending_output()
                         consumed = True
 
                     if consumed:
@@ -237,24 +288,25 @@ def wrap(argv: list[str]) -> int:
                         if not data:
                             continue
 
-                # Track user typing toward a prompt
+                # Track typing toward prompt submission
                 for b in data:
-                    if b in (0x0d, 0x0a):  # CR or LF
+                    if b in (0x0d, 0x0a):
                         if typed_chars >= cfg.min_prompt_chars:
                             prompt_submitted_at = time.time()
+                            last_quiz_at = 0.0  # reset cooldown for new turn
                         typed_chars = 0
-                    elif b == 0x7f or b == 0x08:  # backspace
+                    elif b == 0x7f or b == 0x08:
                         typed_chars = max(0, typed_chars - 1)
-                    elif b >= 0x20 and b < 0x7f:
+                    elif 0x20 <= b < 0x7f:
                         typed_chars += 1
-                    # ignore other control chars
 
-                # Forward the keystrokes to the child
                 os.write(master, data)
 
     except KeyboardInterrupt:
         pass
     finally:
+        # Flush any buffered output and clean up
+        flush_pending_output()
         if saved_tty is not None:
             _restore(saved_tty)
         try:

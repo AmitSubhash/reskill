@@ -1,10 +1,17 @@
-"""reskill CLI.
+"""reskill -- learn during AI thinking time.
 
 Usage:
-  reskill run <command> [args...]   # wrap a command (e.g. claude) with inline quizzes
-  reskill demo                      # run a demo (simulated claude, inline quizzes)
-  reskill stats                     # show your learning stats
-  reskill question                  # render a sample question (for UI testing)
+  reskill claude [args...]    wrap `claude` with inline quizzes (the real deal)
+  reskill run <cmd> [args...] wrap any command with inline quizzes
+  reskill demo                interactive demo (no Claude Code required)
+  reskill stats               show streak, XP, concept mastery
+  reskill question            render a sample quiz box (UI sanity check)
+
+During a wrapped session:
+  1-4   answer the quiz
+  esc   skip this quiz
+  Quizzes pause automatically during Claude permission prompts (y/n),
+  so your keys always go to the right place.
 """
 
 from __future__ import annotations
@@ -100,6 +107,9 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_help()
     if cmd == "run":
         return cmd_run(rest)
+    if cmd == "claude":
+        # shortcut: reskill claude ...  -> reskill run claude ...
+        return cmd_run(["claude"] + rest)
     if cmd == "demo":
         return cmd_demo()
     if cmd == "stats":

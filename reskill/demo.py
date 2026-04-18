@@ -47,15 +47,14 @@ SCENARIOS = [
     {
         "user": "add error handling to the JWT validation in src/auth.py",
         "context_hint": "jwt error handling try except",
-        "thinking_seconds": 6.0,
+        "thinking_seconds": 12.0,  # long thinking -> multiple quizzes
         "tools": [("Read", "src/auth.py")],
         "response": (
             "\n  I'll add error handling to the JWT validation. Looking at "
             "the current code, expired tokens aren't being caught properly -- "
             "they return a 500 instead of 401.\n\n"
             "  I'll wrap the decode call in a try/except block and catch "
-            "specific exceptions instead of using a bare except clause, which "
-            "would also catch KeyboardInterrupt.\n\n"
+            "specific exceptions instead of using a bare except clause.\n\n"
             "  Here's the fix:\n"
         ),
         "code": (
@@ -72,13 +71,12 @@ SCENARIOS = [
     {
         "user": "memoize the expensive lookup in helpers.py with lru_cache",
         "context_hint": "lru_cache memoization",
-        "thinking_seconds": 5.0,
+        "thinking_seconds": 10.0,
         "tools": [("Read", "src/helpers.py")],
         "response": (
             "\n  I'll add @lru_cache to the lookup. Repeated calls with "
             "the same email will return instantly from cache.\n\n"
-            "  Using maxsize=128 keeps memory bounded -- the least "
-            "recently used entry is evicted once the cache fills up.\n"
+            "  Using maxsize=128 keeps memory bounded.\n"
         ),
         "code": (
             "from functools import lru_cache\n\n"
@@ -92,14 +90,12 @@ SCENARIOS = [
     {
         "user": "what status code should I return for POST /users?",
         "context_hint": "HTTP POST creates a resource 201 Created",
-        "thinking_seconds": 4.0,
+        "thinking_seconds": 6.0,
         "tools": [],
         "response": (
             "\n  Return `201 Created` for a successful POST that creates a "
             "new resource. Include the created resource in the body and a "
-            "`Location` header pointing to its URL.\n\n"
-            "  `200 OK` works but is less precise. `204 No Content` is for "
-            "successful operations with no body (like DELETE).\n"
+            "`Location` header pointing to its URL.\n"
         ),
         "code": None,
         "after_tools": [],
@@ -119,15 +115,11 @@ def _stdout_write(s: str) -> None:
 def _read_answer(
     q: Question, timeout: float, state: state_mod.State
 ) -> tuple[str | None, int]:
-    """Wait for 1/2/3/4 or ESC or timeout. Returns (label_or_None, xp).
-
-    If the timeout elapses before the user answers, the quiz is treated as
-    skipped.
-    """
+    """Wait for 1/2/3/4 or ESC or timeout. Returns (label_or_None, xp)."""
     fd = sys.stdin.fileno()
     saved = termios.tcgetattr(fd)
-    tty.setraw(fd)
     try:
+        tty.setraw(fd)
         deadline = time.time() + timeout
         while True:
             remaining = deadline - time.time()
@@ -135,18 +127,25 @@ def _read_answer(
                 state_mod.record_skip(state, q.concept)
                 return None, 0
             r, _, _ = select.select([sys.stdin], [], [], min(0.25, remaining))
-            if r:
+            if not r:
+                continue
+            try:
                 ch = os.read(fd, 1)
-                if ch in (b"1", b"2", b"3", b"4"):
-                    label = ch.decode()
-                    correct = label == q.correct_label
-                    xp = state_mod.record_answer(
-                        state, q.id, q.concept, correct
-                    )
-                    return label, xp
-                if ch == b"\x1b":
-                    state_mod.record_skip(state, q.concept)
-                    return None, 0
+            except OSError:
+                continue
+            if not ch:
+                continue
+            if ch in (b"1", b"2", b"3", b"4"):
+                label = ch.decode()
+                correct = label == q.correct_label
+                xp = state_mod.record_answer(
+                    state, q.id, q.concept, correct
+                )
+                return label, xp
+            if ch == b"\x1b":
+                state_mod.record_skip(state, q.concept)
+                return None, 0
+            # other keys: ignore, keep waiting
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, saved)
 
@@ -253,33 +252,51 @@ def run() -> None:
         _user_prompt(scenario["user"])
         time.sleep(0.4)
 
-        # --- Thinking phase: quiz appears HERE, while Claude thinks ---
+        # --- Thinking phase: keep popping quizzes until Claude is done,
+        #     then wait for the user to finish the last one before showing
+        #     the response. ---
         thinking_deadline = time.time() + scenario["thinking_seconds"]
 
-        seen = set(state.seen_questions)
-        q = generate_question(scenario["context_hint"], seen_ids=seen)
+        # Brief warm-up so the user sees Claude started
+        _thinking_spinner_until(time.time() + 0.6)
 
-        if q is not None:
-            # Show spinner briefly so the user sees Claude started thinking,
-            # then pop the quiz inline.
-            brief = time.time() + 0.8
-            _thinking_spinner_until(brief)
+        still_time = True
+        while still_time:
+            seen = set(state.seen_questions)
+            q = generate_question(scenario["context_hint"], seen_ids=seen)
+            if q is None:
+                break
 
             _stdout_write(render_question(q, streak=state.streak))
 
-            # User has until thinking_deadline to answer
-            answer_timeout = max(1.0, thinking_deadline - time.time())
+            # User may take their time; if thinking deadline has passed,
+            # we let them finish -- response is held until they answer.
+            remaining = thinking_deadline - time.time()
+            answer_timeout = max(6.0, remaining + 30.0)  # generous grace period
             label, xp = _read_answer(q, answer_timeout, state)
             state_mod.save(state)
 
             _stdout_write(render_answer_reveal(q, label, xp))
 
-            # If Claude is still "thinking", keep the spinner going
+            # Short reveal pause so the explanation registers
+            time.sleep(1.0)
+
             remaining = thinking_deadline - time.time()
-            if remaining > 0:
-                _thinking_spinner_until(thinking_deadline)
-        else:
-            # No question matched; just spin through the thinking phase
+            if remaining <= 0:
+                # Claude is done -- if user wants the response, exit loop
+                still_time = False
+            else:
+                # Still thinking; give a small spinner gap before next question
+                gap = min(1.5, remaining)
+                _thinking_spinner_until(time.time() + gap)
+                # Decide whether to pop another: only if we still have some
+                # thinking room and a fresh question exists.
+                remaining = thinking_deadline - time.time()
+                if remaining < 2.0:
+                    still_time = False
+        # If we broke out because of no-more-questions but still had time,
+        # burn the rest with the spinner.
+        if time.time() < thinking_deadline:
             _thinking_spinner_until(thinking_deadline)
 
         # --- Claude's response ---
