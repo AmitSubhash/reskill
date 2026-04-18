@@ -43,8 +43,8 @@ def _term_cols() -> int:
 
 
 def _box_width() -> int:
-    """Prefer 62 chars; fall back if terminal is narrower."""
-    return min(62, max(40, _term_cols() - 8))
+    """Prefer 58 chars; fall back if terminal is narrower."""
+    return min(58, max(38, _term_cols() - 10))
 
 
 def _indent() -> str:
@@ -54,7 +54,10 @@ def _indent() -> str:
 
 
 def _wrap(text: str, width: int) -> list[str]:
+    """Greedy word-wrap. If a single word is longer than the width, hard-break it."""
     out: list[str] = []
+    if width <= 0:
+        return [text]
     for para in text.split("\n"):
         if not para.strip():
             out.append("")
@@ -62,6 +65,13 @@ def _wrap(text: str, width: int) -> list[str]:
         words = para.split()
         line = ""
         for w in words:
+            # Hard-break words that are too long on their own
+            while len(w) > width:
+                if line:
+                    out.append(line)
+                    line = ""
+                out.append(w[:width])
+                w = w[width:]
             if not line:
                 line = w
             elif len(line) + 1 + len(w) <= width:
@@ -216,8 +226,9 @@ def render_countdown_line(seconds_left: float, total: float) -> str:
 
     bar = paint("\u2588" * filled, color) + paint("\u2591" * empty, DARK_ASH, DIM)
     label = paint(f"{seconds_left:>3.0f}s", color, DIM)
+    hint = paint("claude is still thinking", ASH, DIM)
     # Clear to end of line with \x1b[K so old content doesn't linger
-    return f"\r\x1b[2K{_indent()}  {bar}  {label}"
+    return f"\r\x1b[2K{_indent()}  {bar}  {label}  {hint}"
 
 
 def render_correct_flash(

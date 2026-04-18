@@ -159,13 +159,13 @@ def _detect_turn_end(recent: bytes) -> bool:
 @dataclass
 class Config:
     submit_to_quiz_ms: int = 400
-    min_seconds_between_quizzes: float = 2.0
-    quiz_time_limit: float = 15.0       # seconds to answer before auto-skip
-    correct_flash_ms: int = 900         # brief positive flash before next quiz
-    wrong_reveal_ms: int = 4200         # longer read time on wrong answer
+    min_seconds_between_quizzes: float = 3.0   # a bit more breathing room
+    quiz_time_limit: float = 20.0              # seconds to answer before auto-skip
+    correct_flash_ms: int = 1400               # enough time to read "+N xp"
+    wrong_reveal_ms: int = 5000                # longer read time on wrong/skipped
     min_prompt_chars: int = 6
     permission_cooldown_ms: int = 8000
-    countdown_tick_ms: int = 250        # how often we re-render the countdown
+    countdown_tick_ms: int = 250               # how often we update countdown
 
 
 def _set_raw() -> list[int]:
