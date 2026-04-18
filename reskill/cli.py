@@ -6,6 +6,7 @@ Usage:
   reskill session [--since 7d] quiz deck built from your recent commits
   reskill next                 serve one context-matched quiz right now
   reskill review               drill your recently-missed questions
+  reskill doctor               diagnose why reskill isn't behaving
   reskill install              install the Claude Code hooks (PreToolUse,
                                PostToolUse, Stop) that signal the quiz pane
   reskill uninstall            remove the hooks
@@ -193,6 +194,9 @@ def main(argv: list[str] | None = None) -> int:
     if cmd == "review":
         from . import review_cmd
         return review_cmd.run()
+    if cmd == "doctor":
+        from . import doctor
+        return doctor.run()
     if cmd == "install":
         from . import hookinstall
         return hookinstall.install()
