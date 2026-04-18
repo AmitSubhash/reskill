@@ -105,8 +105,36 @@ def _read_key(timeout: float) -> bytes | None:
         return None
 
 
+_IDLE_GRACE_SECONDS = 6.0
+
+
 def _is_thinking() -> bool:
-    return THINKING_FILE.exists()
+    """True if Claude is actively mid-thought OR went idle very recently.
+
+    The hooks toggle the flag several times per turn (PostToolUse clears
+    it between Pre/PostToolUse pairs), so a naive check would bounce the
+    UI in and out. We treat the file as 'still thinking' if it existed
+    within the last few seconds, via a sidecar timestamp.
+    """
+    if THINKING_FILE.exists():
+        _mark_active()
+        return True
+    last = _last_active()
+    return (time.time() - last) < _IDLE_GRACE_SECONDS if last else False
+
+
+def _mark_active() -> None:
+    try:
+        (STATE_DIR / "last_active").write_text(str(time.time()))
+    except OSError:
+        pass
+
+
+def _last_active() -> float:
+    try:
+        return float((STATE_DIR / "last_active").read_text() or 0)
+    except (OSError, ValueError):
+        return 0.0
 
 
 def _render_idle_card() -> None:
