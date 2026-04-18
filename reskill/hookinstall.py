@@ -104,7 +104,34 @@ def _append_hook(settings: dict, event: str, hook: dict) -> None:
     arr.append({"matcher": "*", "hooks": [hook]})
 
 
-def install(with_statusline: bool = True) -> int:
+WRAPPER_SCRIPT_PATH = Path.home() / ".claude" / "reskill-statusline-wrapper.sh"
+WRAPPER_MARKER = "reskill-statusline-wrapper"
+
+
+def _write_compose_wrapper(existing_command: str) -> None:
+    """Create a wrapper script that runs BOTH the user's existing
+    statusLine command and `reskill statusline`, concatenating with \\n.
+
+    Claude Code calls statusLine with JSON on stdin. The wrapper reads
+    stdin once, then pipes the same payload to both commands so neither
+    starves for input.
+    """
+    reskill_bin = _find_reskill_binary()
+    content = f"""#!/usr/bin/env bash
+# {WRAPPER_MARKER}
+# Composes the user's existing statusLine with reSkill's one-liner.
+# Both get the same JSON payload on stdin.
+set -e
+input=$(cat)
+printf '%s' "$input" | {existing_command}
+printf '\\n'
+printf '%s' "$input" | {reskill_bin} statusline
+"""
+    WRAPPER_SCRIPT_PATH.write_text(content)
+    WRAPPER_SCRIPT_PATH.chmod(0o755)
+
+
+def install(with_statusline: bool = True, compose_statusline: bool = True) -> int:
     """Install all reskill hooks + (optionally) the statusLine. Idempotent.
 
     Hooks:
@@ -112,6 +139,13 @@ def install(with_statusline: bool = True) -> int:
       - PreToolUse:       keeps it set as Claude starts tools
       - PostToolUse:      clears it when tool completes
       - Stop:             clears it + logs the transcript into cache
+
+    statusLine:
+      - If no statusLine is configured: point it at `reskill statusline`.
+      - If one IS configured and compose_statusline=True: write a
+        wrapper script that runs both commands and concatenates output,
+        preserving the user's existing line.
+      - Otherwise: leave the existing statusLine alone.
     """
     settings = _load_settings()
     already = _has_any_reskill_hook(settings)
@@ -124,17 +158,34 @@ def install(with_statusline: bool = True) -> int:
         _append_hook(settings, "PreToolUse", _build_thinking_on_hook())
         _append_hook(settings, "PostToolUse", _build_thinking_off_hook())
 
-    if with_statusline and "statusLine" not in settings:
-        settings["statusLine"] = {
-            "type": "command",
-            "command": f"{_find_reskill_binary()} statusline",
-            "refreshInterval": 2,
-            "padding": 2,
-        }
-        print(paint("  statusLine configured", SAGE, BOLD))
+    existing_sl = settings.get("statusLine", {}) if with_statusline else {}
+    existing_cmd = existing_sl.get("command", "") if isinstance(existing_sl, dict) else ""
+    reskill_cmd = f"{_find_reskill_binary()} statusline"
 
-    if already and (not with_statusline or "statusLine" in settings and settings["statusLine"].get("command", "").endswith("reskill statusline")):
-        return 0
+    if with_statusline:
+        if not existing_sl:
+            settings["statusLine"] = {
+                "type": "command",
+                "command": reskill_cmd,
+                "refreshInterval": 2,
+                "padding": 2,
+            }
+            print(paint("  statusLine configured (reskill only)", SAGE, BOLD))
+        elif WRAPPER_MARKER in existing_cmd or "reskill statusline" in existing_cmd:
+            # Already wrapped or already us.
+            pass
+        elif compose_statusline:
+            _write_compose_wrapper(existing_cmd)
+            settings["statusLine"] = {
+                "type": "command",
+                "command": f"bash {WRAPPER_SCRIPT_PATH}",
+                "refreshInterval": 2,
+                "padding": 2,
+            }
+            print(
+                paint("  statusLine composed", SAGE, BOLD),
+                paint("(your existing line + reskill's)", ASH, DIM),
+            )
 
     _save_settings(settings)
     if not already:
@@ -172,9 +223,30 @@ def uninstall() -> int:
             settings[event] = cleaned
 
     sl = settings.get("statusLine", {})
-    if isinstance(sl, dict) and "reskill statusline" in sl.get("command", ""):
-        del settings["statusLine"]
-        removed = True
+    if isinstance(sl, dict):
+        cmd = sl.get("command", "")
+        if "reskill statusline" in cmd:
+            del settings["statusLine"]
+            removed = True
+        elif WRAPPER_MARKER in cmd or str(WRAPPER_SCRIPT_PATH) in cmd:
+            # Try to restore the composed-underneath command.
+            if WRAPPER_SCRIPT_PATH.exists():
+                try:
+                    for line in WRAPPER_SCRIPT_PATH.read_text().splitlines():
+                        if line.startswith('printf \'%s\' "$input" | ') and "reskill" not in line:
+                            original = line.split(" | ", 1)[1]
+                            settings["statusLine"] = {
+                                "type": "command",
+                                "command": original,
+                            }
+                            break
+                except OSError:
+                    pass
+                try:
+                    WRAPPER_SCRIPT_PATH.unlink()
+                except OSError:
+                    pass
+            removed = True
 
     if not removed:
         print(paint("  reskill hooks were not installed; nothing to do", ASH, DIM))

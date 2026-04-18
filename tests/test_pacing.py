@@ -108,5 +108,11 @@ def test_seconds_until_next_reports_remaining_gap():
     ps = PacingState()
     note_quiz_served(ps, "caching", now=NOW)
     note_quiz_finished(ps, now=NOW + 30)
-    remaining = seconds_until_next_allowed(ps, now=NOW + 30 + 60)
-    assert 25 <= remaining <= 35
+    # Check the reported remaining is (min_gap - elapsed), regardless of
+    # what min_gap is configured to (env-tunable since v0.2).
+    elapsed_since_finish = 1.0
+    remaining = seconds_until_next_allowed(
+        ps, now=NOW + 30 + elapsed_since_finish,
+    )
+    expected = MIN_SECONDS_BETWEEN_QUIZZES - elapsed_since_finish
+    assert abs(remaining - expected) < 2

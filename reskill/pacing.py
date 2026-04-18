@@ -40,11 +40,29 @@ class PacingState:
 
 
 # Evidence-cited defaults. See module docstring for citations.
-MIN_SECONDS_AFTER_THINKING_START = 3.0
-MIN_SECONDS_BETWEEN_QUIZZES = 90.0
-MAX_QUIZZES_PER_HOUR = 6
-MAX_QUIZZES_PER_DAY = 20
-MIN_SECONDS_BEFORE_SAME_CONCEPT = 10 * 60
+# All tunable via env vars so power users can dial up or down:
+#   RESKILL_MIN_GAP=30   seconds between quizzes (default 30)
+#   RESKILL_MAX_PER_HOUR=10
+#   RESKILL_MAX_PER_DAY=40
+#   RESKILL_SAME_CONCEPT_COOLDOWN=120
+# Research default was 90s; lowered to 30s based on user feedback that
+# the live-pane felt too quiet. Still respects the 3s post-thinking
+# debounce (Iqbal & Bailey 2008) that avoids micro-interrupts.
+def _env_float(name: str, default: float) -> float:
+    import os
+    try:
+        return float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+MIN_SECONDS_AFTER_THINKING_START = _env_float("RESKILL_THINKING_DEBOUNCE", 3.0)
+MIN_SECONDS_BETWEEN_QUIZZES = _env_float("RESKILL_MIN_GAP", 30.0)
+MAX_QUIZZES_PER_HOUR = int(_env_float("RESKILL_MAX_PER_HOUR", 10))
+MAX_QUIZZES_PER_DAY = int(_env_float("RESKILL_MAX_PER_DAY", 40))
+MIN_SECONDS_BEFORE_SAME_CONCEPT = _env_float(
+    "RESKILL_SAME_CONCEPT_COOLDOWN", 2 * 60,
+)
 
 
 def load() -> PacingState:

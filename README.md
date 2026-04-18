@@ -30,8 +30,36 @@ The architecture that actually works:
 ```bash
 cd ~/Projects/reskill
 pip install -e .
-brew install tmux           # required for `reskill claude`
+brew install tmux           # only for `reskill claude` -- everything else works without it
 reskill install             # adds hooks + statusLine to ~/.claude/settings.json
+```
+
+## Do I need tmux?
+
+Only for `reskill claude` (the interactive live-wrap with a quiz pane
+alongside Claude). Without tmux you still get:
+
+- `reskill next` — single question any time, from any terminal
+- `reskill session` — post-session deliberate-practice deck
+- `reskill statusline` — passive progress readout at the bottom of
+  Claude Code's own UI (installed automatically by `reskill install`)
+- `reskill status` / `reskill streak` / `reskill stats` — CLI views
+
+If your existing `statusLine` command already shows useful info,
+`reskill install` writes a wrapper that runs BOTH — yours on line 1,
+reskill's on line 2. Uninstall restores the original.
+
+## Tuning
+
+Pace and color behavior are env-var tunable:
+
+```bash
+export RESKILL_MIN_GAP=30          # seconds between quizzes (default 30)
+export RESKILL_MAX_PER_HOUR=10     # cap / hour (default 10)
+export RESKILL_MAX_PER_DAY=40      # cap / day (default 40)
+export RESKILL_THINKING_DEBOUNCE=3 # skip first N seconds of thinking
+export RESKILL_THEME=mono          # force no-color (BOLD/DIM only)
+export NO_COLOR=1                  # standard: also forces mono mode
 ```
 
 ## The three ways to use it

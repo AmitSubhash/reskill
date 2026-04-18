@@ -132,13 +132,13 @@ def cmd_stats() -> int:
 def cmd_question() -> int:
     """Render a sample question for testing."""
     from .question import TEMPLATE_BANK
-    from .inline_box import render_question, render_answer_reveal
+    from .inline_box import render_question, render_wrong_reveal
 
     # Pick one question from each concept
-    for concept, questions in list(TEMPLATE_BANK.items())[:3]:
+    for _concept, questions in list(TEMPLATE_BANK.items())[:3]:
         q = questions[0]
         sys.stdout.write(render_question(q, streak=7))
-        sys.stdout.write(render_answer_reveal(q, q.correct_label, 50))
+        sys.stdout.write(render_wrong_reveal(q, chosen=None))
     return 0
 
 
