@@ -238,6 +238,26 @@ def wrap(argv: list[str], quizzes_enabled: bool = True) -> int:
     def stdout_write(b: bytes) -> None:
         os.write(sys.stdout.fileno(), b)
 
+    def _build_panel_lines(
+        q: Question, st: state_mod.State, seconds_left: float
+    ) -> list[str]:
+        """Render the quiz as a list of lines that fit in the pinned region.
+
+        We use a compact inline_box layout but return raw lines rather than a
+        single string with newlines, so the region can draw them at absolute
+        rows without cursor math.
+        """
+        rendered = render_question(q, streak=st.streak)
+        # The render output includes newlines; split and drop the trailing
+        # empty line if any.
+        lines = rendered.split("\n")
+        # Append countdown line
+        lines.append(
+            render_countdown_line(seconds_left, cfg.quiz_time_limit).replace(
+                "\r\x1b[2K", "").strip()
+        )
+        return lines
+
     def reset_ink_state() -> None:
         """Make Claude Code's Ink forget its previous render position.
 
@@ -262,34 +282,36 @@ def wrap(argv: list[str], quizzes_enabled: bool = True) -> int:
             pass
 
     def run_quiz(q: Question) -> None:
-        """Show quiz inline, tick a single-line countdown, capture answer.
-
-        Key trick: before and after the quiz, we send SIGSTOP+SIGCONT to
-        Claude Code's child process. Ink's SIGCONT handler resets its
-        `previousOutput` state so its next render can't reach up into our
-        box -- it starts fresh from the current cursor position.
+        """Show quiz in a pinned bottom region while Claude's output keeps
+        scrolling above. No screen clears. No Ink collision (Ink writes in
+        the main region, we own the panel area at the bottom).
         """
-        # Make Ink forget where it was rendering, so our box is safe.
-        reset_ink_state()
-        # Drain any leftover pending master output before our write
-        stdout_write(b"\n")
-        stdout_write(render_question(q, streak=state.streak).encode())
+        from .region import Region, term_size
+        # Render full quiz into lines, figure out height needed.
+        initial_panel = _build_panel_lines(q, state, seconds_left=cfg.quiz_time_limit)
+        # Reserve enough rows for the whole quiz; cap at ~60% of terminal
+        rows, _ = term_size()
+        panel_height = min(len(initial_panel) + 1, max(8, rows * 6 // 10))
+
+        region = Region(height=panel_height)
+        region.activate(sys.stdout.fileno())
 
         deadline = time.time() + cfg.quiz_time_limit
-        last_countdown_time = 0.0
+        last_draw = 0.0
         label: str | None = None
         skip_reason: str | None = None
+
+        # Initial draw
+        region.draw(initial_panel, sys.stdout.fileno())
 
         while True:
             now = time.time()
             remaining = max(0.0, deadline - now)
 
-            # Update the countdown line in place (\r + \x1b[2K)
-            if now - last_countdown_time >= cfg.countdown_tick_ms / 1000.0:
-                stdout_write(
-                    render_countdown_line(remaining, cfg.quiz_time_limit).encode()
-                )
-                last_countdown_time = now
+            if now - last_draw >= cfg.countdown_tick_ms / 1000.0:
+                panel = _build_panel_lines(q, state, seconds_left=remaining)
+                region.draw(panel, sys.stdout.fileno())
+                last_draw = now
 
             if remaining <= 0:
                 skip_reason = "timeout"
@@ -305,9 +327,8 @@ def wrap(argv: list[str], quizzes_enabled: bool = True) -> int:
                     break
                 if data:
                     recent_raw.extend(data)
-                    held_output.extend(data)
-                    if len(held_output) > 80000:
-                        del held_output[:-40000]
+                    # Claude's bytes flow through to the main region naturally.
+                    stdout_write(data)
                     stripped = _ANSI_RE.sub(b"", data)
                     content_buffer.extend(stripped)
                     if _detect_permission(bytes(recent_raw[-2000:])):
@@ -334,8 +355,7 @@ def wrap(argv: list[str], quizzes_enabled: bool = True) -> int:
                     skip_reason = "mute"
                     break
 
-        # End the countdown line so the next print starts on a fresh line
-        stdout_write(b"\r\x1b[2K")
+        region.deactivate(sys.stdout.fileno())
 
         if label is not None:
             correct = label == q.correct_label
