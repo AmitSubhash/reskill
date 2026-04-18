@@ -39,49 +39,88 @@ from . import state as state_mod
 # ANSI escape / OSC stripper
 _ANSI_RE = re.compile(rb"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\].*?(?:\x07|\x1b\\)", re.DOTALL)
 
-# Braille spinner frames (used by some Claude Code versions and our demo)
+# Braille spinner frames (used by demo.py and some older Claude Code versions)
 _SPINNER_BYTES = {
     c.encode("utf-8")
     for c in "\u280b\u2819\u2839\u2838\u283c\u2834\u2826\u2827\u2807\u280f"
 }
 
-# Thinking-state keywords Claude Code emits (v2.1.x uses these with ●/+ bullets).
-# We match case-insensitively on the stripped bytes.
-_THINKING_KEYWORDS = [
-    b"thinking",        # "Thinking", "thinking with xhigh effort"
-    b"reticulating",    # Claude's spinner verb
-    b"cogitating",
-    b"pondering",
-    b"ruminating",
-    b"deliberating",
-    b"cerebrating",
-    b"noodling",
-    b"percolating",
-    b"machinating",
-    b"reading",         # reading files
-    b"searching",
-    b"analyzing",
-    b"planning",
-    b"crafting",
-    b"working",
-    b"hmm\xe2\x80\xa6",  # "Hmm…" (unicode ellipsis)
-    b"hmm...",
-]
+# Claude Code v2.1.x uses these glyph characters for its spinner animation.
+# Source: yasasbanukaofficial/claude-code src/components/Spinner/utils.ts
+_SPINNER_GLYPHS = {
+    c.encode("utf-8") for c in "\u00b7\u2722\u2733\u2736\u273b\u273d"
+    # "·", "✢", "✳", "✶", "✻", "✽"
+}
 
-# Permission prompt detection patterns
+# The full 170+ spinner verb list from Claude Code's leaked source.
+# Source: yasasbanukaofficial/claude-code src/constants/spinnerVerbs.ts
+# We match LOWERCASED keywords against the recent output window.
+_SPINNER_VERB_KEYWORDS = {
+    kw.lower().encode("utf-8")
+    for kw in (
+        "Accomplishing", "Actioning", "Actualizing", "Architecting", "Baking",
+        "Beaming", "Beboppin", "Befuddling", "Billowing", "Blanching",
+        "Bloviating", "Boogieing", "Boondoggling", "Booping", "Bootstrapping",
+        "Brewing", "Bunning", "Burrowing", "Calculating", "Canoodling",
+        "Caramelizing", "Cascading", "Catapulting", "Cerebrating", "Channeling",
+        "Choreographing", "Churning", "Clauding", "Coalescing", "Cogitating",
+        "Combobulating", "Composing", "Computing", "Concocting", "Considering",
+        "Contemplating", "Cooking", "Crafting", "Creating", "Crunching",
+        "Crystallizing", "Cultivating", "Deciphering", "Deliberating",
+        "Determining", "Discombobulating", "Doodling", "Drizzling", "Ebbing",
+        "Effecting", "Elucidating", "Embellishing", "Enchanting", "Envisioning",
+        "Evaporating", "Fermenting", "Finagling", "Flambéing", "Flibbertigibbeting",
+        "Flowing", "Flummoxing", "Fluttering", "Forging", "Forming", "Frolicking",
+        "Frosting", "Gallivanting", "Galloping", "Garnishing", "Generating",
+        "Gesticulating", "Germinating", "Gitifying", "Grooving", "Gusting",
+        "Harmonizing", "Hashing", "Hatching", "Herding", "Honking",
+        "Hullaballooing", "Hyperspacing", "Ideating", "Imagining", "Improvising",
+        "Incubating", "Inferring", "Infusing", "Ionizing", "Jitterbugging",
+        "Julienning", "Kneading", "Leavening", "Levitating", "Lollygagging",
+        "Manifesting", "Marinating", "Meandering", "Metamorphosing", "Misting",
+        "Moonwalking", "Moseying", "Mulling", "Mustering", "Musing", "Nebulizing",
+        "Nesting", "Newspapering", "Noodling", "Nucleating", "Orbiting",
+        "Orchestrating", "Osmosing", "Perambulating", "Percolating", "Perusing",
+        "Philosophising", "Photosynthesizing", "Pollinating", "Pondering",
+        "Pontificating", "Pouncing", "Precipitating", "Prestidigitating",
+        "Processing", "Proofing", "Propagating", "Puttering", "Puzzling",
+        "Quantumizing", "Recombobulating", "Reticulating", "Roosting", "Ruminating",
+        "Sautéing", "Scampering", "Schlepping", "Scurrying", "Seasoning",
+        "Shenaniganing", "Shimmying", "Simmering", "Skedaddling", "Sketching",
+        "Slithering", "Smooshing", "Spelunking", "Spinning", "Sprouting",
+        "Stewing", "Sublimating", "Swirling", "Swooping", "Symbioting",
+        "Synthesizing", "Tempering", "Thinking", "Thundering", "Tinkering",
+        "Tomfoolering", "Transfiguring", "Transmuting", "Twisting", "Undulating",
+        "Unfurling", "Unravelling", "Vibing", "Waddling", "Wandering", "Warping",
+        "Whirlpooling", "Whirring", "Whisking", "Wibbling", "Working", "Wrangling",
+        "Zesting", "Zigzagging",
+        # Status verbs used during tool execution
+        "Reading", "Listing", "Searching", "Analyzing", "Planning", "Editing",
+        # Effort suffix (the "(thinking with xhigh effort)" text)
+        "with low effort", "with medium effort", "with high effort",
+        "with xhigh effort", "with max effort",
+    )
+}
+
+# Permission prompt detection patterns.
+# Source: yasasbanukaofficial/claude-code src/components/permissions/*.tsx
+# Claude Code uses select-menu prompts with 'Yes' / 'Yes, and ...' / 'No' labels.
 _PERMISSION_MARKERS = [
-    re.compile(rb"do you want to proceed", re.I),
-    re.compile(rb"do you want to continue", re.I),
+    re.compile(rb"do you want to (proceed|continue|allow)", re.I),
     re.compile(rb"\(y/n\)|\(y/N\)|\(Y/n\)", re.I),
-    re.compile(rb"1\.\s*yes", re.I),
-    re.compile(rb"press\s+\d\s+to", re.I),
+    # Numbered option lists with "Yes" or "No" as option 1
+    re.compile(rb"^\s*1[\.\)]\s*Yes", re.I | re.M),
+    # Claude Code's specific option labels
+    re.compile(rb"Yes, and allow", re.I),
+    re.compile(rb"Yes, during this session", re.I),
+    re.compile(rb"Yes, don't ask again", re.I),
+    re.compile(rb"No, and tell Claude", re.I),
 ]
 
 # When we see these, the permission prompt has been resolved
 _PERMISSION_RESOLVED_MARKERS = [
-    re.compile(rb"proceeding", re.I),
     re.compile(rb"permission denied", re.I),
-    re.compile(rb"cancelled", re.I),
+    re.compile(rb"operation cancelled", re.I),
 ]
 
 
@@ -129,25 +168,24 @@ def _set_winsize(fd: int, rows: int, cols: int) -> None:
 def _is_thinking(data: bytes, recent_raw: bytes) -> bool:
     """Heuristic: is the child currently in a 'thinking' state?
 
-    True if either:
-      - the data contains a known braille spinner frame (demo or older CC), OR
-      - the recent output contains a thinking keyword ("Thinking",
-        "Reticulating", "Reading", etc.) -- Claude Code v2.1+ pattern.
-
-    AND the new content chunk is small (not a burst of real response tokens).
+    True if any of:
+      - braille spinner frame (demo / older CC)
+      - Claude Code v2.1.x glyph (· ✢ ✳ ✶ ✻ ✽)
+      - one of the 170+ known spinner verbs appears in recent output
+    AND the new chunk is small (not a burst of real response tokens).
     """
     stripped = _ANSI_RE.sub(b"", data)
     if len(stripped) > 400:
-        # Burst of real content -- response is probably streaming now.
         return False
 
-    has_spinner = any(s in data for s in _SPINNER_BYTES)
-    if has_spinner:
+    if any(s in data for s in _SPINNER_BYTES):
+        return True
+    if any(g in data for g in _SPINNER_GLYPHS):
         return True
 
-    # Check the recent window (last ~1.5KB) for thinking keywords, case-insensitive.
+    # Check the recent window for any spinner verb, case-insensitive.
     window = recent_raw[-1500:].lower()
-    return any(kw in window for kw in _THINKING_KEYWORDS)
+    return any(kw in window for kw in _SPINNER_VERB_KEYWORDS)
 
 
 def _detect_permission_prompt(recent_text: bytes) -> bool:
