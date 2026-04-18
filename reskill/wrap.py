@@ -142,12 +142,19 @@ class Config:
     submit_to_quiz_ms: int = 300
     # Cooldown between consecutive quizzes within the same thinking window
     min_seconds_between_quizzes: float = 2.5
-    # How long the answer reveal stays before we consider the next quiz
+    # How long the answer reveal stays on the alt screen before we switch back
     reveal_duration_ms: int = 3000
     # Minimum chars typed before Enter counts as a prompt submission
     min_prompt_chars: int = 6
     # How long after seeing a permission prompt to stay suppressed
     permission_cooldown_ms: int = 8000
+
+
+# ANSI escape sequences for alternate screen buffer (what vim/htop use).
+ALT_SCREEN_ENTER = b"\x1b[?1049h\x1b[H"
+ALT_SCREEN_EXIT = b"\x1b[?1049l"
+CURSOR_HIDE = b"\x1b[?25l"
+CURSOR_SHOW = b"\x1b[?25h"
 
 
 def _set_raw() -> list[int]:
@@ -261,25 +268,31 @@ def wrap(argv: list[str], quizzes_enabled: bool = True) -> int:
     # Quiz state
     pending_q: Question | None = None
     awaiting_answer = False
+    in_alt_screen = False           # True while quiz is on the alt screen
+    alt_screen_exit_at: float = 0.0 # if > 0, exit alt screen at this time
     last_quiz_at: float = 0.0
     reveal_until: float = 0.0      # during this window don't show another quiz
     suppress_quizzes_until: float = 0.0  # permission prompt cooldown
 
-    # Output buffering while a quiz is on screen
-    pending_output = bytearray()
-
     exit_status = 0
 
-    def flush_pending_output() -> None:
-        if pending_output:
-            os.write(sys.stdout.fileno(), bytes(pending_output))
-            pending_output.clear()
+    def enter_alt_screen() -> None:
+        os.write(sys.stdout.fileno(), ALT_SCREEN_ENTER + CURSOR_HIDE)
+
+    def exit_alt_screen() -> None:
+        os.write(sys.stdout.fileno(), ALT_SCREEN_EXIT + CURSOR_SHOW)
 
     try:
         while True:
             now = time.time()
             if reveal_until and now > reveal_until:
                 reveal_until = 0.0
+
+            # If we're in alt screen and the reveal has had its time, leave.
+            if in_alt_screen and alt_screen_exit_at and now >= alt_screen_exit_at:
+                exit_alt_screen()
+                in_alt_screen = False
+                alt_screen_exit_at = 0.0
 
             r, _, _ = select.select([sys.stdin, master], [], [], 0.05)
 
@@ -299,33 +312,29 @@ def wrap(argv: list[str], quizzes_enabled: bool = True) -> int:
                 # Detect permission prompt -- must take priority over quizzes
                 if _detect_permission_prompt(bytes(recent_raw[-2000:])):
                     suppress_quizzes_until = now + cfg.permission_cooldown_ms / 1000.0
-                    # If a quiz is live, abort it so keys reach Claude
-                    if awaiting_answer and pending_q is not None:
-                        state_mod.record_skip(state, pending_q.concept)
-                        state_mod.save(state)
-                        pending_q = None
-                        awaiting_answer = False
-                        flush_pending_output()
+                    if in_alt_screen:
+                        # Get out of the way NOW so the user sees the prompt
+                        exit_alt_screen()
+                        in_alt_screen = False
+                        alt_screen_exit_at = 0.0
+                        if awaiting_answer and pending_q is not None:
+                            state_mod.record_skip(state, pending_q.concept)
+                            state_mod.save(state)
+                            pending_q = None
+                            awaiting_answer = False
                 elif _detect_permission_resolved(bytes(recent_raw[-2000:])):
                     suppress_quizzes_until = min(
                         suppress_quizzes_until, now + 0.5
                     )
 
-                # Detect turn completion (Claude printed "Worked for 5s" etc).
-                # Reset the per-turn state so we don't inject a quiz into a
-                # turn that's already over.
+                # Turn completion: stop popping new quizzes for this turn
                 if _detect_turn_end(bytes(recent_raw[-1000:])):
                     prompt_submitted_at = 0
-                    if awaiting_answer:
-                        # User still on a quiz -- let them finish, but don't
-                        # pop any more for this turn.
-                        pass
 
-                # If we're waiting for an answer, buffer real content
-                # (let spinner/thinking frames through so the user still sees Claude alive)
-                if awaiting_answer and not _is_thinking(data, bytes(recent_raw)):
-                    pending_output.extend(data)
-                else:
+                # Forward output to the terminal ONLY if we're NOT in alt screen.
+                # While the quiz is visible, Claude's repaints are dropped --
+                # Ink will redraw correctly on its next frame after we switch back.
+                if not in_alt_screen:
                     os.write(sys.stdout.fileno(), data)
 
                 # Accumulate stripped content for question generation
@@ -334,14 +343,14 @@ def wrap(argv: list[str], quizzes_enabled: bool = True) -> int:
                 if len(content_buffer) > 20000:
                     del content_buffer[:-10000]
 
-                # Quiz trigger: in a thinking window, not in permission,
-                # not mid-quiz, not in reveal cooldown, reskill is enabled
+                # Quiz trigger
                 if (
                     not session_muted
                     and prompt_submitted_at > 0
                     and (now - prompt_submitted_at) * 1000 > cfg.submit_to_quiz_ms
                     and now > suppress_quizzes_until
                     and not awaiting_answer
+                    and not in_alt_screen
                     and now > reveal_until
                     and (now - last_quiz_at) > cfg.min_seconds_between_quizzes
                     and _is_thinking(data, bytes(recent_raw))
@@ -353,8 +362,9 @@ def wrap(argv: list[str], quizzes_enabled: bool = True) -> int:
                         pending_q = q
                         awaiting_answer = True
                         last_quiz_at = now
-                        # Clear the current spinner line so the box sits cleanly
-                        os.write(sys.stdout.fileno(), b"\r\x1b[2K")
+                        # Switch to alt screen so CC's Ink UI is out of the way
+                        enter_alt_screen()
+                        in_alt_screen = True
                         rendered = render_question(q, streak=state.streak)
                         os.write(sys.stdout.fileno(), rendered.encode())
 
@@ -370,50 +380,50 @@ def wrap(argv: list[str], quizzes_enabled: bool = True) -> int:
                 if awaiting_answer and pending_q is not None:
                     ch = data[:1]
                     consumed = False
+                    label: str | None = None
+                    skip_reason: str | None = None
+
                     if ch in (b"1", b"2", b"3", b"4"):
                         label = ch.decode()
-                        correct = label == pending_q.correct_label
-                        xp = state_mod.record_answer(
-                            state, pending_q.id, pending_q.concept, correct,
-                        )
-                        state_mod.save(state)
-                        rendered = render_answer_reveal(pending_q, label, xp)
-                        os.write(sys.stdout.fileno(), rendered.encode())
-                        pending_q = None
-                        awaiting_answer = False
-                        reveal_until = time.time() + cfg.reveal_duration_ms / 1000.0
-                        flush_pending_output()
                         consumed = True
                     elif ch in (b"\x1b", b"x"):
-                        state_mod.record_skip(state, pending_q.concept)
-                        state_mod.save(state)
-                        rendered = render_answer_reveal(pending_q, None, 0)
-                        os.write(sys.stdout.fileno(), rendered.encode())
-                        pending_q = None
-                        awaiting_answer = False
-                        reveal_until = time.time() + cfg.reveal_duration_ms / 1000.0
-                        flush_pending_output()
+                        skip_reason = "skip"
                         consumed = True
                     elif ch == b"X":
-                        # Capital X: skip this one AND mute for rest of session
-                        state_mod.record_skip(state, pending_q.concept)
-                        state_mod.save(state)
-                        session_muted = True
-                        rendered = render_answer_reveal(pending_q, None, 0)
-                        os.write(sys.stdout.fileno(), rendered.encode())
-                        # Small muted-for-session notice
-                        from .palette import paint, ASH, DIM
-                        notice = paint(
-                            "  reskill muted for this session -- run `reskill resume` to turn it back on\n",
-                            ASH, DIM,
-                        )
-                        os.write(sys.stdout.fileno(), notice.encode())
-                        pending_q = None
-                        awaiting_answer = False
-                        flush_pending_output()
+                        skip_reason = "mute"
                         consumed = True
 
                     if consumed:
+                        if label is not None:
+                            correct = label == pending_q.correct_label
+                            xp = state_mod.record_answer(
+                                state, pending_q.id, pending_q.concept, correct,
+                            )
+                            rendered = render_answer_reveal(pending_q, label, xp)
+                        else:
+                            state_mod.record_skip(state, pending_q.concept)
+                            rendered = render_answer_reveal(pending_q, None, 0)
+                            if skip_reason == "mute":
+                                session_muted = True
+                        state_mod.save(state)
+
+                        # Clear alt screen, show the reveal
+                        os.write(sys.stdout.fileno(), b"\x1b[2J\x1b[H")
+                        os.write(sys.stdout.fileno(), rendered.encode())
+                        if skip_reason == "mute":
+                            from .palette import paint, ASH, DIM
+                            notice = paint(
+                                "  reskill muted for this session -- run `reskill resume` to re-enable\n",
+                                ASH, DIM,
+                            )
+                            os.write(sys.stdout.fileno(), notice.encode())
+
+                        pending_q = None
+                        awaiting_answer = False
+                        reveal_until = time.time() + cfg.reveal_duration_ms / 1000.0
+                        # Stay on alt screen for reveal_duration_ms, then switch back
+                        alt_screen_exit_at = time.time() + cfg.reveal_duration_ms / 1000.0
+
                         data = data[1:]
                         if not data:
                             continue
@@ -423,20 +433,26 @@ def wrap(argv: list[str], quizzes_enabled: bool = True) -> int:
                     if b in (0x0d, 0x0a):
                         if typed_chars >= cfg.min_prompt_chars:
                             prompt_submitted_at = time.time()
-                            last_quiz_at = 0.0  # reset cooldown for new turn
+                            last_quiz_at = 0.0
                         typed_chars = 0
                     elif b == 0x7f or b == 0x08:
                         typed_chars = max(0, typed_chars - 1)
                     elif 0x20 <= b < 0x7f:
                         typed_chars += 1
 
-                os.write(master, data)
+                # Pass keystrokes to Claude (but not while quiz is showing)
+                if not awaiting_answer:
+                    os.write(master, data)
 
     except KeyboardInterrupt:
         pass
     finally:
-        # Flush any buffered output and clean up
-        flush_pending_output()
+        # Make sure we're not stranded on alt screen with cursor hidden
+        if in_alt_screen:
+            try:
+                os.write(sys.stdout.fileno(), ALT_SCREEN_EXIT + CURSOR_SHOW)
+            except OSError:
+                pass
         if saved_tty is not None:
             _restore(saved_tty)
         try:
