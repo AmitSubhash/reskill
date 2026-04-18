@@ -45,12 +45,24 @@ _SPINNER_BYTES = {
     for c in "\u280b\u2819\u2839\u2838\u283c\u2834\u2826\u2827\u2807\u280f"
 }
 
-# Claude Code v2.1.x uses these glyph characters for its spinner animation.
-# Source: yasasbanukaofficial/claude-code src/components/Spinner/utils.ts
+# Claude Code v2.1.x spinner glyphs (src/components/Spinner/utils.ts)
+# plus status bullets and effort indicators (src/constants/figures.ts)
 _SPINNER_GLYPHS = {
-    c.encode("utf-8") for c in "\u00b7\u2722\u2733\u2736\u273b\u273d"
-    # "·", "✢", "✳", "✶", "✻", "✽"
+    c.encode("utf-8")
+    for c in (
+        "\u00b7\u2722\u2733\u2736\u273b\u273d"   # ·  ✢  ✳  ✶  ✻  ✽
+        "\u23fa"                                  # ⏺ BLACK_CIRCLE (macOS)
+        "\u25cf"                                  # ●  BLACK_CIRCLE (linux) / EFFORT_HIGH
+        "\u2219"                                  # ∙ BULLET_OPERATOR
+        "\u25cb\u25d0\u25c9"                      # ○ ◐ ◉ effort low/med/max
+    )
 }
+
+# Past-tense verbs shown when a turn completes (src/constants/turnCompletionVerbs.ts)
+# e.g. "Worked for 5s" -- means Claude has finished thinking.
+_TURN_END_PATTERNS = [
+    re.compile(rb"\b(baked|brewed|churned|cogitated|cooked|crunched|saut\xc3\xa9ed|worked)\s+for\s+\d", re.I),
+]
 
 # The full 170+ spinner verb list from Claude Code's leaked source.
 # Source: yasasbanukaofficial/claude-code src/constants/spinnerVerbs.ts
@@ -197,6 +209,11 @@ def _detect_permission_resolved(recent_text: bytes) -> bool:
     return any(pat.search(recent_text) for pat in _PERMISSION_RESOLVED_MARKERS)
 
 
+def _detect_turn_end(recent_text: bytes) -> bool:
+    """True when Claude's past-tense completion verb appears ('Worked for 5s')."""
+    return any(pat.search(recent_text[-500:]) for pat in _TURN_END_PATTERNS)
+
+
 def _build_context_window(buffer: bytearray, limit: int = 2000) -> str:
     recent = bytes(buffer[-limit:])
     return recent.decode("utf-8", errors="ignore")
@@ -279,7 +296,7 @@ def wrap(argv: list[str], quizzes_enabled: bool = True) -> int:
                 if len(recent_raw) > 4000:
                     del recent_raw[:-2000]
 
-                # Detect permission prompt
+                # Detect permission prompt -- must take priority over quizzes
                 if _detect_permission_prompt(bytes(recent_raw[-2000:])):
                     suppress_quizzes_until = now + cfg.permission_cooldown_ms / 1000.0
                     # If a quiz is live, abort it so keys reach Claude
@@ -293,6 +310,16 @@ def wrap(argv: list[str], quizzes_enabled: bool = True) -> int:
                     suppress_quizzes_until = min(
                         suppress_quizzes_until, now + 0.5
                     )
+
+                # Detect turn completion (Claude printed "Worked for 5s" etc).
+                # Reset the per-turn state so we don't inject a quiz into a
+                # turn that's already over.
+                if _detect_turn_end(bytes(recent_raw[-1000:])):
+                    prompt_submitted_at = 0
+                    if awaiting_answer:
+                        # User still on a quiz -- let them finish, but don't
+                        # pop any more for this turn.
+                        pass
 
                 # If we're waiting for an answer, buffer real content
                 # (let spinner/thinking frames through so the user still sees Claude alive)
