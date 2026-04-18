@@ -469,7 +469,842 @@ TEMPLATE_BANK: dict[str, list[Question]] = {
                 "state between tests is a common source of flaky tests."
             ),
         ),
+    ],    # ───── Python data model & gotchas ─────
+    "mutable_default": [
+        _q(
+            concept="mutable-default",
+            format="output",
+            prompt="What does the second call print?",
+            code=(
+                "def add(item, bag=[]):\n"
+                "    bag.append(item)\n"
+                "    return bag\n\n"
+                "print(add(1))\n"
+                "print(add(2))"
+            ),
+            opts=[
+                ("[1] then [2]", False),
+                ("[1] then [1, 2]", True),
+                ("[1] then [] then [2]", False),
+                ("TypeError on the second call", False),
+            ],
+            explanation=(
+                "Default arguments are evaluated ONCE at function definition. "
+                "The list persists across calls. Idiom: use `bag=None` and "
+                "`if bag is None: bag = []` inside the body."
+            ),
+        ),
     ],
+    "late_binding_closure": [
+        _q(
+            concept="closures",
+            format="output",
+            prompt="What gets printed?",
+            code=(
+                "fns = [lambda: i for i in range(3)]\n"
+                "print([f() for f in fns])"
+            ),
+            opts=[
+                ("[0, 1, 2]", False),
+                ("[2, 2, 2]", True),
+                ("[3, 3, 3]", False),
+                ("TypeError", False),
+            ],
+            explanation=(
+                "Closures capture variables by reference, not value. By the time "
+                "the lambdas run, `i` is 2. Fix with a default arg: "
+                "`lambda i=i: i`, or `functools.partial`."
+            ),
+        ),
+    ],
+    "is_vs_eq": [
+        _q(
+            concept="identity",
+            format="output",
+            prompt="What does this print?",
+            code=(
+                "a = 257\n"
+                "b = 257\n"
+                "print(a is b, a == b)"
+            ),
+            opts=[
+                ("True True", False),
+                ("False True", True),
+                ("True False", False),
+                ("Implementation-defined for both", False),
+            ],
+            explanation=(
+                "CPython caches small ints in [-5, 256], so `is` returns True "
+                "there but is False above 256. Always use `==` for value compare; "
+                "reserve `is` for None/True/False/sentinels."
+            ),
+        ),
+    ],
+    "copy_vs_deepcopy": [
+        _q(
+            concept="copy",
+            format="bug",
+            prompt="Mutating one row of grid_b corrupts grid_a. Which line is the bug?",
+            code=(
+                "1  import copy\n"
+                "2  grid_a = [[0]*3 for _ in range(3)]\n"
+                "3  grid_b = copy.copy(grid_a)\n"
+                "4  grid_b[0][0] = 99\n"
+                "5  print(grid_a[0][0])"
+            ),
+            opts=[
+                ("Line 2 -- list multiplication shares references", False),
+                ("Line 3 -- copy.copy is shallow; inner lists are shared", True),
+                ("Line 4 -- you should slice with [0:1]", False),
+                ("Line 5 -- print is evaluating lazily", False),
+            ],
+            explanation=(
+                "`copy.copy` (shallow) duplicates the outer list but the inner "
+                "lists are still the same objects. Use `copy.deepcopy(grid_a)` "
+                "or `[row[:] for row in grid_a]`."
+            ),
+        ),
+    ],
+    "slots": [
+        _q(
+            concept="slots",
+            format="why",
+            prompt="Why might you add `__slots__` to a class with millions of instances?",
+            code=(
+                "class Point:\n"
+                "    __slots__ = ('x', 'y')\n"
+                "    def __init__(self, x, y):\n"
+                "        self.x, self.y = x, y"
+            ),
+            opts=[
+                ("Faster method dispatch via C-level lookups", False),
+                ("Eliminates per-instance __dict__, cutting memory ~40-50%", True),
+                ("Makes the class thread-safe", False),
+                ("Required to use @dataclass", False),
+            ],
+            explanation=(
+                "__slots__ replaces the per-instance dict with a fixed-size "
+                "struct. Big memory win (and a small attribute-access speedup) "
+                "but disallows new attributes and complicates multiple inheritance."
+            ),
+        ),
+    ],
+    "dataclass_frozen": [
+        _q(
+            concept="dataclass",
+            format="idiom",
+            prompt="You need a hashable, immutable record type. Most Pythonic?",
+            opts=[
+                ("class C:\n    def __init__(self, x): self.x = x", False),
+                ("@dataclass(frozen=True, slots=True)\nclass C: x: int", True),
+                ("collections.namedtuple('C', ['x'])", False),
+                ("dict(x=1)  # just use a dict", False),
+            ],
+            explanation=(
+                "`@dataclass(frozen=True, slots=True)` (3.10+) gives __hash__, "
+                "__eq__, __repr__, immutability, and the memory benefit of "
+                "__slots__ in one decorator. namedtuple still works but lacks "
+                "field defaults and inheritance ergonomics."
+            ),
+        ),
+    ],
+    "walrus": [
+        _q(
+            concept="walrus",
+            format="refactor",
+            prompt="Best refactor of this read-loop?",
+            code=(
+                "chunk = f.read(4096)\n"
+                "while chunk:\n"
+                "    process(chunk)\n"
+                "    chunk = f.read(4096)"
+            ),
+            opts=[
+                ("for chunk in f: process(chunk)", False),
+                ("while chunk := f.read(4096):\n    process(chunk)", True),
+                ("while True:\n    process(f.read(4096))", False),
+                ("process(f.read())  # one shot", False),
+            ],
+            explanation=(
+                "The walrus `:=` (PEP 572) assigns AND tests in one expression, "
+                "removing the duplicate read. `for chunk in f` would iterate "
+                "lines, not 4096-byte blocks."
+            ),
+        ),
+    ],
+    "f_string_debug": [
+        _q(
+            concept="f-string",
+            format="output",
+            prompt="What prints?",
+            code=(
+                "x = [1, 2]\n"
+                "print(f'{x=}')"
+            ),
+            opts=[
+                ("[1, 2]", False),
+                ("x=[1, 2]", True),
+                ("x = [1, 2]", False),
+                ("SyntaxError on older Pythons only", False),
+            ],
+            explanation=(
+                "The `=` specifier (3.8+) prints both the expression text and "
+                "its repr. Add `!r` or `:>10` after it for formatting. Best "
+                "debug-print idiom in modern Python."
+            ),
+        ),
+    ],
+    "dict_order": [
+        _q(
+            concept="dict",
+            format="why",
+            prompt="Why can experienced devs now rely on dict iteration order?",
+            opts=[
+                ("PEP 468 made kwargs ordered, dicts are still arbitrary", False),
+                ("CPython 3.6 made it an impl detail; 3.7 promoted it to language spec", True),
+                ("Only OrderedDict guarantees it; dict does not", False),
+                ("Sorted by hash, which is stable across runs", False),
+            ],
+            explanation=(
+                "Insertion-order is GUARANTEED since Python 3.7. OrderedDict "
+                "still has uses (move_to_end, equality is order-sensitive) but "
+                "for plain ordering, dict is enough now."
+            ),
+        ),
+    ],
+    "pathlib_path": [
+        _q(
+            concept="pathlib",
+            format="idiom",
+            prompt="Most Pythonic way to read a UTF-8 JSON file?",
+            opts=[
+                ("open(os.path.join(d,'f.json')).read()", False),
+                ("Path(d, 'f.json').read_text(encoding='utf-8')", True),
+                ("with codecs.open(...) as f: f.read()", False),
+                ("io.open(d+'/f.json','r').read()", False),
+            ],
+            explanation=(
+                "`pathlib.Path` cross-platform-joins, opens with explicit "
+                "encoding, and avoids file-descriptor leaks since `read_text` "
+                "closes for you. Always pass `encoding=` -- the default is "
+                "platform-dependent (locale.getencoding)."
+            ),
+        ),
+    ],
+    "datetime_tz": [
+        _q(
+            concept="datetime",
+            format="cause",
+            prompt="`TypeError: can't compare offset-naive and offset-aware datetimes`. Why?",
+            code=(
+                "from datetime import datetime, timezone\n"
+                "a = datetime.utcnow()\n"
+                "b = datetime.now(timezone.utc)\n"
+                "print(a < b)"
+            ),
+            opts=[
+                ("Clock skew between OS calls", False),
+                ("`utcnow()` returns a NAIVE datetime; `now(tz=...)` returns aware", True),
+                ("`<` is undefined on datetime", False),
+                ("UTC isn't a real timezone object", False),
+            ],
+            explanation=(
+                "`datetime.utcnow()` is a footgun: returns naive UTC. Always "
+                "use `datetime.now(timezone.utc)` (or `zoneinfo.ZoneInfo('UTC')`). "
+                "Naive vs aware datetimes won't compare or subtract."
+            ),
+        ),
+    ],
+    "subprocess_shell": [
+        _q(
+            concept="subprocess",
+            format="gotcha",
+            prompt="Security review flags this. Why?",
+            code=(
+                "subprocess.run(\n"
+                "    f'grep {pattern} {path}',\n"
+                "    shell=True, check=True\n"
+                ")"
+            ),
+            opts=[
+                ("`check=True` raises on nonzero exit -- should be False", False),
+                ("`shell=True` with f-string interpolation enables shell injection", True),
+                ("`subprocess.run` is deprecated; use `os.system`", False),
+                ("Missing `capture_output=True` makes it hang", False),
+            ],
+            explanation=(
+                "If `pattern = 'foo; rm -rf ~'`, the shell happily runs both. "
+                "Pass a list and skip the shell: "
+                "`subprocess.run(['grep', pattern, path], check=True)`. Use "
+                "`shell=True` only with hard-coded strings."
+            ),
+        ),
+    ],
+    "logging_lazy": [
+        _q(
+            concept="logging",
+            format="bug",
+            prompt="Why does the linter flag line 2?",
+            code=(
+                "1  user = lookup(uid)\n"
+                "2  log.debug(f'fetched user {user!r}')\n"
+                "3  return user"
+            ),
+            opts=[
+                ("f-strings are slower than .format()", False),
+                ("It formats the string even when DEBUG is disabled", True),
+                ("`!r` is invalid in logging", False),
+                ("log.debug shouldn't accept user data", False),
+            ],
+            explanation=(
+                "`log.debug('fetched user %r', user)` defers formatting until "
+                "the handler decides to emit. f-strings always evaluate, "
+                "burning CPU on hot paths in production where DEBUG is off."
+            ),
+        ),
+    ],
+    "typeddict": [
+        _q(
+            concept="typing-typeddict",
+            format="idiom",
+            prompt="REST endpoint returns a JSON dict with optional `email`. Best type?",
+            opts=[
+                ("dict[str, Any]", False),
+                ("class User(TypedDict):\n    id: int\n    email: NotRequired[str]", True),
+                ("@dataclass\nclass User: id: int; email: str | None", False),
+                ("namedtuple('User', ['id','email'])", False),
+            ],
+            explanation=(
+                "TypedDict (PEP 589) is the right tool for dict-shaped JSON "
+                "payloads -- no runtime construction cost, mypy-checked. "
+                "`NotRequired` (PEP 655) marks optional keys without unioning "
+                "the value type."
+            ),
+        ),
+    ],
+    "protocol_vs_abc": [
+        _q(
+            concept="typing-protocol",
+            format="why",
+            prompt="Why prefer `Protocol` over an ABC for a `Repository` interface?",
+            opts=[
+                ("Protocols are faster at runtime", False),
+                ("Structural typing -- existing classes match without inheriting", True),
+                ("ABCs are deprecated in 3.12", False),
+                ("Only Protocol supports generics", False),
+            ],
+            explanation=(
+                "Protocol (PEP 544) gives static duck-typing: any class with "
+                "the right methods is a Repository, no `class X(Repository)` "
+                "needed. ABCs force inheritance, which couples you to the "
+                "interface module."
+            ),
+        ),
+    ],
+    "gil_decision": [
+        _q(
+            concept="concurrency",
+            format="scenario",
+            prompt="You need to speed up a CPU-bound numpy-light pure-Python loop. Best?",
+            opts=[
+                ("threading.Thread x 8", False),
+                ("multiprocessing.Pool or ProcessPoolExecutor", True),
+                ("asyncio.gather over the items", False),
+                ("Add @lru_cache and call it a day", False),
+            ],
+            explanation=(
+                "GIL serializes pure-Python bytecode, so threads don't help "
+                "CPU-bound work. Processes get parallelism at the cost of IPC "
+                "overhead. asyncio is for I/O-bound waits. (numpy-heavy code "
+                "often releases the GIL and CAN benefit from threads.)"
+            ),
+        ),
+    ],
+    "asyncio_taskgroup": [
+        _q(
+            concept="async-taskgroup",
+            format="refactor",
+            prompt="Modern (3.11+) replacement for `asyncio.gather` with proper cancellation?",
+            opts=[
+                ("asyncio.wait_for(gather(...), 30)", False),
+                ("async with asyncio.TaskGroup() as tg: tg.create_task(...)", True),
+                ("asyncio.run_until_complete(...)", False),
+                ("Just await each coroutine in a list", False),
+            ],
+            explanation=(
+                "TaskGroup (3.11) gives structured concurrency: if one task "
+                "raises, siblings are cancelled and an ExceptionGroup is "
+                "raised. `gather` swallows the second-and-onward errors and "
+                "leaks tasks on cancel."
+            ),
+        ),
+    ],
+    "race_condition": [
+        _q(
+            concept="concurrency-race",
+            format="cause",
+            prompt="Counter occasionally undercounts under threads. Most likely cause?",
+            code=(
+                "count = 0\n"
+                "def bump():\n"
+                "    global count\n"
+                "    count += 1"
+            ),
+            opts=[
+                ("`global` is unsafe in threads", False),
+                ("`count += 1` is read-modify-write, not atomic across threads", True),
+                ("The GIL makes all integer ops atomic, so this can't happen", False),
+                ("Python integers are immutable so writes are lost", False),
+            ],
+            explanation=(
+                "Even with the GIL, bytecode boundaries can interleave between "
+                "the LOAD and STORE. Use `threading.Lock`, `itertools.count`, "
+                "or `queue.Queue`. (CPython's `list.append` IS atomic, but "
+                "`+=` on an int is not.)"
+            ),
+        ),
+    ],
+    "pytest_parametrize": [
+        _q(
+            concept="testing-parametrize",
+            format="idiom",
+            prompt="Most idiomatic way to test the same logic over 4 inputs?",
+            opts=[
+                ("Four separate test functions", False),
+                ("@pytest.mark.parametrize('a,b,exp', [(1,2,3),...])", True),
+                ("for a,b,exp in cases: assert f(a,b)==exp", False),
+                ("subTest in a single test method", False),
+            ],
+            explanation=(
+                "`parametrize` makes each case a separate reported test (own "
+                "name, own pass/fail). A for-loop stops at the first failure "
+                "and gives one combined report -- much harder to debug."
+            ),
+        ),
+    ],
+    "mock_patch_target": [
+        _q(
+            concept="testing-mock",
+            format="bug",
+            prompt="Test still hits the real network. Why?",
+            code=(
+                "# myapp/service.py\n"
+                "from requests import get\n"
+                "def fetch(): return get(URL).json()\n\n"
+                "# tests/test_service.py\n"
+                "@patch('requests.get')\n"
+                "def test_fetch(mock_get): ..."
+            ),
+            opts=[
+                ("@patch can't replace functions, only classes", False),
+                ("You patched where `get` is DEFINED, not where it's USED", True),
+                ("Need autospec=True to patch builtins-like callables", False),
+                ("`from x import y` makes y un-patchable", False),
+            ],
+            explanation=(
+                "Patch the namespace that LOOKS UP the name: "
+                "`@patch('myapp.service.get')`. The original module-level import "
+                "in service.py created a local binding that the global "
+                "`requests.get` patch can't reach."
+            ),
+        ),
+    ],
+    "numpy_view_copy": [
+        _q(
+            concept="numpy",
+            format="output",
+            prompt="What does `a[0, 1]` print at the end?",
+            code=(
+                "import numpy as np\n"
+                "a = np.arange(6).reshape(2, 3)\n"
+                "b = a[:, 1:]\n"
+                "b[0, 0] = 99\n"
+                "print(a[0, 1])"
+            ),
+            opts=[
+                ("1 (slice copies)", False),
+                ("99 (basic slice returns a view)", True),
+                ("0 (numpy is functional)", False),
+                ("Raises -- can't assign into a slice", False),
+            ],
+            explanation=(
+                "Basic slicing on ndarray returns a VIEW that shares memory. "
+                "Use `a[:, 1:].copy()` to detach. Fancy indexing (boolean or "
+                "integer arrays) DOES copy -- learn the boundary or you'll "
+                "have ghost mutations."
+            ),
+        ),
+    ],
+    "numpy_broadcasting": [
+        _q(
+            concept="numpy-broadcast",
+            format="output",
+            prompt="Shape of `out`?",
+            code=(
+                "a = np.ones((3, 1, 5))\n"
+                "b = np.ones((4, 1))\n"
+                "out = a + b"
+            ),
+            opts=[
+                ("(3, 4, 5)", True),
+                ("(4, 1, 5)", False),
+                ("ValueError: shapes not aligned", False),
+                ("(3, 5)", False),
+            ],
+            explanation=(
+                "Broadcasting aligns trailing dims and stretches size-1 dims. "
+                "(3,1,5) and (_,4,1) -> (3,4,5). Mental model: right-align the "
+                "shapes, every dim must match or be 1."
+            ),
+        ),
+    ],
+    "pandas_settingwithcopy": [
+        _q(
+            concept="pandas",
+            format="bug",
+            prompt="Pandas yells `SettingWithCopyWarning` here. Real fix?",
+            code=(
+                "subset = df[df.age > 18]\n"
+                "subset['adult'] = True"
+            ),
+            opts=[
+                ("Use `subset.adult = True`", False),
+                ("Use `df.loc[df.age > 18, 'adult'] = True`", True),
+                ("Wrap in `with pd.option_context(...)` to silence", False),
+                ("Call `.reset_index()` on subset first", False),
+            ],
+            explanation=(
+                "Chained indexing (`df[mask]['col'] = ...`) may write to a "
+                "view OR a copy -- pandas can't tell. Always express the "
+                "single assignment with `.loc[mask, col] = val`."
+            ),
+        ),
+    ],
+    "torch_detach": [
+        _q(
+            concept="pytorch",
+            format="why",
+            prompt="Why `.detach().cpu().numpy()` and not just `.numpy()`?",
+            code=(
+                "loss = model(x).mean()\n"
+                "history.append(loss.detach().cpu().numpy())"
+            ),
+            opts=[
+                ("Cosmetic -- the three calls are equivalent to .numpy()", False),
+                ("detach drops the autograd graph; cpu moves off CUDA; numpy needs CPU + no-grad", True),
+                ("numpy() automatically detaches, but only for float32", False),
+                ("Required for DataLoader workers", False),
+            ],
+            explanation=(
+                "`.numpy()` errors if the tensor still requires grad OR is on "
+                "CUDA. `.detach()` severs the autograd graph (otherwise you "
+                "leak the whole compute graph through `history`). `.cpu()` "
+                "transfers off-device. Skipping detach is the #1 silent OOM "
+                "in training loops."
+            ),
+        ),
+    ],
+    "matplotlib_close": [
+        _q(
+            concept="matplotlib",
+            format="cause",
+            prompt="Memory grows linearly while batch-saving 10k figures. Why?",
+            code=(
+                "for i, data in enumerate(items):\n"
+                "    fig, ax = plt.subplots()\n"
+                "    ax.plot(data)\n"
+                "    fig.savefig(f'out/{i}.png')"
+            ),
+            opts=[
+                ("savefig caches the rendered PNG in memory", False),
+                ("pyplot keeps every Figure in its registry until you close it", True),
+                ("matplotlib leaks the GIL", False),
+                ("PNG encoder retains the last canvas", False),
+            ],
+            explanation=(
+                "`plt.subplots()` registers the figure with the pyplot state "
+                "machine. Add `plt.close(fig)` (or use the OO API: "
+                "`Figure(); FigureCanvasAgg(...).print_png(...)`)."
+            ),
+        ),
+    ],
+    "constant_time_compare": [
+        _q(
+            concept="security",
+            format="why",
+            prompt="Why use `hmac.compare_digest(a, b)` instead of `a == b` for tokens?",
+            opts=[
+                ("It hashes both sides first", False),
+                ("Constant-time comparison defeats timing-based side-channels", True),
+                ("`==` is broken for bytes objects", False),
+                ("It auto-base64-decodes", False),
+            ],
+            explanation=(
+                "Plain `==` short-circuits at the first mismatched byte. Network "
+                "attackers can use response-time differences to recover the "
+                "secret one byte at a time. `compare_digest` always scans both "
+                "fully."
+            ),
+        ),
+    ],
+    "cors_preflight": [
+        _q(
+            concept="cors",
+            format="cause",
+            prompt="Browser fires an OPTIONS request before POSTing JSON. Why?",
+            opts=[
+                ("Always for cross-origin requests", False),
+                ("POST + Content-Type: application/json triggers preflight (non-simple)", True),
+                ("Bug in the browser; should not happen", False),
+                ("Service worker is intercepting", False),
+            ],
+            explanation=(
+                "Simple requests (GET/HEAD/POST with form-data Content-Types) "
+                "skip preflight. JSON bodies, custom headers, or methods "
+                "outside GET/HEAD/POST trigger an OPTIONS preflight that the "
+                "server must answer with the right Access-Control-* headers."
+            ),
+        ),
+    ],
+    "retry_jitter": [
+        _q(
+            concept="http-retry",
+            format="tradeoff",
+            prompt="Service overloaded; 1000 clients retry with `sleep(2**n)`. Result?",
+            opts=[
+                ("Smooth recovery -- exponential backoff is enough", False),
+                ("Thundering herd at each power of 2 boundary; add jitter", True),
+                ("Clients give up; backoff is too aggressive", False),
+                ("OS combines retries via TCP coalescing", False),
+            ],
+            explanation=(
+                "Synchronized exponential backoff just moves the spike. Add "
+                "random jitter: `sleep(random.uniform(0, 2**n))` (full jitter) "
+                "or `sleep(2**n / 2 + random.uniform(0, 2**n / 2))` "
+                "(equal jitter). AWS Architecture Blog has the canonical writeup."
+            ),
+        ),
+    ],
+    "sql_null_semantics": [
+        _q(
+            concept="sql",
+            format="output",
+            prompt="A column has values [1, 2, NULL]. What does `SELECT * WHERE col NOT IN (2, NULL)` return?",
+            opts=[
+                ("[1]", False),
+                ("[1, NULL]", False),
+                ("Empty set", True),
+                ("[1, 2]", False),
+            ],
+            explanation=(
+                "`x NOT IN (2, NULL)` becomes `x<>2 AND x<>NULL`. Anything "
+                "compared to NULL is UNKNOWN, so the AND is never TRUE. Use "
+                "`NOT EXISTS` or strip NULLs from the IN list."
+            ),
+        ),
+    ],
+    "window_function": [
+        _q(
+            concept="sql-window",
+            format="refactor",
+            prompt="Get each user's most recent order without losing other columns. Best?",
+            opts=[
+                ("GROUP BY user_id and MAX(created_at) -- columns will collapse", False),
+                ("ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY created_at DESC) = 1", True),
+                ("DISTINCT ON every column -- portable across DBs", False),
+                ("SELECT MAX(*) FROM orders", False),
+            ],
+            explanation=(
+                "Window functions retain row context. `ROW_NUMBER() OVER (...)` "
+                "ranks per-partition without collapsing; filter on rn=1. "
+                "Postgres has `DISTINCT ON` as a shortcut, but it's non-standard."
+            ),
+        ),
+    ],
+    "rebase_vs_merge": [
+        _q(
+            concept="git",
+            format="scenario",
+            prompt="You want to update your feature branch with main without ugly merge bubbles. Best?",
+            opts=[
+                ("git merge main", False),
+                ("git rebase main, then force-push WITH-LEASE", True),
+                ("git pull --rebase=preserve", False),
+                ("git reset --hard origin/main", False),
+            ],
+            explanation=(
+                "Rebase replays your commits on top of main for a linear "
+                "history. Use `--force-with-lease` (not `--force`) so you "
+                "abort if someone else pushed to your branch in the meantime. "
+                "Never rebase shared/long-lived branches like main."
+            ),
+        ),
+    ],
+    "set_pipefail": [
+        _q(
+            concept="bash",
+            format="bug",
+            prompt="`curl bad-url | tee out.log` exits 0 even though curl failed. Fix?",
+            opts=[
+                ("Add `set -e` at the top", False),
+                ("Add `set -euo pipefail` -- without pipefail, pipeline status is the LAST cmd", True),
+                ("Replace tee with `>` redirect", False),
+                ("Use `&&` between curl and tee", False),
+            ],
+            explanation=(
+                "Default bash returns the exit status of the rightmost "
+                "command in a pipeline. `set -o pipefail` makes the pipeline "
+                "fail if ANY stage fails. Combined with `set -eu` it's the "
+                "safe default for scripts."
+            ),
+        ),
+    ],
+    "find_xargs": [
+        _q(
+            concept="bash-xargs",
+            format="bug",
+            prompt="`find . -name '*.py' | xargs grep TODO` mishandles a file named `my file.py`. Fix?",
+            opts=[
+                ("Quote the glob: `'*.py'` (already done; should still work)", False),
+                ("`find . -name '*.py' -print0 | xargs -0 grep TODO`", True),
+                ("Use `find -exec grep TODO {} +` -- xargs is deprecated", False),
+                ("Wrap in a subshell", False),
+            ],
+            explanation=(
+                "xargs splits on whitespace by default, so `my file.py` "
+                "becomes two args. `-print0` separates with NUL bytes; `-0` "
+                "tells xargs to use them. `-exec ... +` is also fine and "
+                "avoids xargs entirely."
+            ),
+        ),
+    ],
+    "useeffect_deps": [
+        _q(
+            concept="react",
+            format="bug",
+            prompt="Counter logs stale values forever. Fix?",
+            code=(
+                "function C() {\n"
+                "  const [n, setN] = useState(0);\n"
+                "  useEffect(() => {\n"
+                "    const id = setInterval(() => console.log(n), 1000);\n"
+                "    return () => clearInterval(id);\n"
+                "  }, []);\n"
+                "  return <button onClick={() => setN(n+1)}>{n}</button>;\n"
+                "}"
+            ),
+            opts=[
+                ("Use `useLayoutEffect` instead", False),
+                ("Add `n` to the deps array, or use a ref / functional setState", True),
+                ("Move setInterval outside the effect", False),
+                ("React effects can't read state -- use Redux", False),
+            ],
+            explanation=(
+                "Empty deps freezes the closure on the first render's `n` "
+                "(stale closure). Either depend on `n` (re-creates the "
+                "interval) or use `setN(prev => prev+1)` plus a `useRef` to "
+                "read the latest value without re-subscribing."
+            ),
+        ),
+    ],
+    "react_keys": [
+        _q(
+            concept="react-keys",
+            format="why",
+            prompt="Why is `key={index}` an anti-pattern when the list can reorder?",
+            opts=[
+                ("React requires string keys", False),
+                ("Keys identify instances; index keys cause state to follow position, not data", True),
+                ("Performance -- index lookups are O(n)", False),
+                ("It's fine; only matters in React 16", False),
+            ],
+            explanation=(
+                "If you delete the first item, every subsequent item gets a "
+                "new key, so React unmounts and remounts them all. Form "
+                "state, focus, animations get reset. Use a stable id from "
+                "your data."
+            ),
+        ),
+    ],
+    "ts_unknown_vs_any": [
+        _q(
+            concept="typescript",
+            format="idiom",
+            prompt="JSON.parse returns `any`. Best replacement type?",
+            opts=[
+                ("Cast to `any`; it's just JSON", False),
+                ("Type as `unknown` and narrow with a type guard", True),
+                ("`object` -- safer than any", False),
+                ("`Record<string, string>` -- close enough", False),
+            ],
+            explanation=(
+                "`any` disables type-checking everywhere it touches. "
+                "`unknown` forces you to narrow before use, keeping safety. "
+                "Pair with a runtime validator (zod, valibot) for end-to-end "
+                "guarantees."
+            ),
+        ),
+    ],
+    "eq_eq_eq": [
+        _q(
+            concept="javascript",
+            format="output",
+            prompt="What does `[] == false` evaluate to in JS?",
+            opts=[
+                ("false (different types)", False),
+                ("true (both coerce to '' / 0)", True),
+                ("TypeError", False),
+                ("undefined", False),
+            ],
+            explanation=(
+                "`==` triggers ToPrimitive then ToNumber: `[]` -> `''` -> 0, "
+                "`false` -> 0. Equal! This is why ESLint's `eqeqeq` rule "
+                "exists. Always use `===` unless you specifically want "
+                "null-undefined coalescing (`x == null`)."
+            ),
+        ),
+    ],
+    "complexity_in_list": [
+        _q(
+            concept="complexity",
+            format="complexity",
+            prompt="`x in seen` where `seen` is a list of N items. Big-O?",
+            opts=[
+                ("O(1) -- Python optimizes membership", False),
+                ("O(log N) -- bisect is implicit", False),
+                ("O(N) -- linear scan", True),
+                ("O(N log N)", False),
+            ],
+            explanation=(
+                "`in` on a list is linear. Convert to a set for O(1) average. "
+                "This is the most common 'works in dev, dies in prod' "
+                "performance bug -- a tight loop with `if x in big_list`."
+            ),
+        ),
+    ],
+    "cloze_counter": [
+        _q(
+            concept="collections",
+            format="cloze",
+            prompt="Fill the blank to count word occurrences in one line:",
+            code=(
+                "from collections import _____\n"
+                "counts = _____(words)"
+            ),
+            opts=[
+                ("defaultdict / defaultdict(int)", False),
+                ("Counter / Counter", True),
+                ("OrderedDict / OrderedDict", False),
+                ("ChainMap / ChainMap", False),
+            ],
+            explanation=(
+                "`Counter(iterable)` does it in one call and gives you "
+                "`.most_common(k)` for free. defaultdict(int) works but is "
+                "more code; OrderedDict and ChainMap solve different problems."
+            ),
+        ),
+    ],
+
 }
 
 
@@ -497,7 +1332,85 @@ PATTERNS: list[tuple[str, str, re.Pattern[str]]] = [
     ("try_except", "error handling",
      re.compile(r"\btry\s*:|\bexcept\b|\braise\b", re.I)),
     ("context_manager_with", "context managers",
-     re.compile(r"\bwith\s+\w+\s+as\b|\b__enter__\b|\b__exit__\b", re.I)),
+     re.compile(r"\bwith\s+\w+\s+as\b|\b__enter__\b|\b__exit__\b", re.I)),    ("mutable_default", "mutable default args",
+     re.compile(r"def\s+\w+\([^)]*=\s*\[\]|=\s*\{\}|=\s*set\(\)", re.I)),
+    ("late_binding_closure", "closure late binding",
+     re.compile(r"lambda\s+[^:]*:\s*\w+|\bfor\b.{0,40}\blambda\b", re.I)),
+    ("is_vs_eq", "identity vs equality",
+     re.compile(r"\bis\s+(None|True|False|not\s+None)\b|\bid\(", re.I)),
+    ("copy_vs_deepcopy", "shallow vs deep copy",
+     re.compile(r"\bcopy\.(copy|deepcopy)\b|\bimport\s+copy\b", re.I)),
+    ("slots", "__slots__",
+     re.compile(r"__slots__\s*=", re.I)),
+    ("dataclass_frozen", "dataclasses",
+     re.compile(r"@dataclass(\s*\(|\b)|from\s+dataclasses\s+import", re.I)),
+    ("walrus", "walrus operator",
+     re.compile(r":=")),
+    ("f_string_debug", "f-string debug",
+     re.compile(r"f['\"][^'\"]*\{\w+=\}", re.I)),
+    ("dict_order", "dict ordering",
+     re.compile(r"\bOrderedDict\b|insertion[-\s]?order", re.I)),
+    ("pathlib_path", "pathlib",
+     re.compile(r"\bfrom\s+pathlib\b|\bPath\(|os\.path\.(join|exists|dirname)", re.I)),
+    ("datetime_tz", "timezone-aware datetime",
+     re.compile(r"datetime\.(utcnow|now)\b|\btzinfo\b|\bzoneinfo\b|\btimezone\.utc\b", re.I)),
+    ("subprocess_shell", "subprocess shell injection",
+     re.compile(r"subprocess\.(run|call|Popen|check_output)|shell\s*=\s*True", re.I)),
+    ("logging_lazy", "logging vs print",
+     re.compile(r"\blogger?\.(debug|info|warning|error)\(\s*f['\"]", re.I)),
+    ("typeddict", "TypedDict",
+     re.compile(r"\bTypedDict\b|\bNotRequired\b|\bRequired\[", re.I)),
+    ("protocol_vs_abc", "Protocol typing",
+     re.compile(r"\bProtocol\)|\bruntime_checkable\b|\bfrom\s+typing\s+import.*Protocol", re.I)),
+    ("gil_decision", "GIL / threading vs multiprocessing",
+     re.compile(r"\bGIL\b|threading\.(Thread|Lock)|multiprocessing\.|ProcessPoolExecutor", re.I)),
+    ("asyncio_taskgroup", "asyncio TaskGroup",
+     re.compile(r"\bTaskGroup\b|asyncio\.gather|asyncio\.wait\b", re.I)),
+    ("race_condition", "race conditions",
+     re.compile(r"\brace\s+condition\b|\bthread[-\s]?safe\b|\bLock\(\)", re.I)),
+    ("pytest_parametrize", "pytest parametrize",
+     re.compile(r"@pytest\.mark\.parametrize|@parametrize\b", re.I)),
+    ("mock_patch_target", "mock patching",
+     re.compile(r"@patch\(|mock\.patch\(|MagicMock\(|unittest\.mock", re.I)),
+    ("numpy_view_copy", "numpy view vs copy",
+     re.compile(r"\bnp\.(asarray|ascontiguousarray|may_share_memory)\b|\.copy\(\).{0,20}numpy", re.I)),
+    ("numpy_broadcasting", "numpy broadcasting",
+     re.compile(r"\bbroadcast(ing)?\b|np\.newaxis|reshape\([^)]*1\b", re.I)),
+    ("pandas_settingwithcopy", "pandas SettingWithCopy",
+     re.compile(r"SettingWithCopy|\.loc\[|\.iloc\[|chained\s+assignment", re.I)),
+    ("torch_detach", "torch detach/cpu",
+     re.compile(r"\.detach\(\)|\.cpu\(\)|\.requires_grad|torch\.no_grad", re.I)),
+    ("matplotlib_close", "matplotlib figure leak",
+     re.compile(r"plt\.(subplots|figure|savefig|close)|matplotlib\.pyplot", re.I)),
+    ("constant_time_compare", "timing-safe compare",
+     re.compile(r"hmac\.compare_digest|secrets\.compare_digest|constant[-\s]?time", re.I)),
+    ("cors_preflight", "CORS preflight",
+     re.compile(r"\bCORS\b|Access-Control-|preflight|OPTIONS\s+request", re.I)),
+    ("retry_jitter", "retry with jitter",
+     re.compile(r"\bretry\b|exponential\s+backoff|tenacity|backoff\.expo", re.I)),
+    ("sql_null_semantics", "SQL NULL semantics",
+     re.compile(r"\bNOT\s+IN\s*\(|IS\s+NULL\b|COALESCE\(", re.I)),
+    ("window_function", "SQL window functions",
+     re.compile(r"\bOVER\s*\(|ROW_NUMBER\(\)|PARTITION\s+BY|RANK\(\)", re.I)),
+    ("rebase_vs_merge", "git rebase",
+     re.compile(r"git\s+rebase|--force-with-lease|interactive\s+rebase", re.I)),
+    ("set_pipefail", "bash pipefail",
+     re.compile(r"set\s+-[eo]+\s+pipefail|pipefail|set\s+-euo", re.I)),
+    ("find_xargs", "find/xargs quoting",
+     re.compile(r"\bfind\s+\.[^|]*\|\s*xargs\b|-print0|xargs\s+-0", re.I)),
+    ("useeffect_deps", "React useEffect deps",
+     re.compile(r"useEffect\s*\(|stale\s+closure|dependency\s+array", re.I)),
+    ("react_keys", "React list keys",
+     re.compile(r"key=\{[^}]*index", re.I)),
+    ("ts_unknown_vs_any", "TypeScript unknown",
+     re.compile(r":\s*(unknown|any)\b|as\s+unknown\s+as\b", re.I)),
+    ("eq_eq_eq", "JS strict equality",
+     re.compile(r"==[^=]|!=[^=]|eqeqeq", re.I)),
+    ("complexity_in_list", "membership complexity",
+     re.compile(r"\bin\s+\w+_?list\b|\.index\(", re.I)),
+    ("cloze_counter", "Counter",
+     re.compile(r"\bCounter\(|collections\.Counter", re.I)),
+
 ]
 
 

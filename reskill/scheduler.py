@@ -51,6 +51,49 @@ class Pick:
 _SECONDS_PER_DAY = 86400
 
 
+# Interleaving only helps across CONFUSABLE concepts (Brunmair & Richter
+# 2021: the discriminative-contrast mechanism). Interleaving async with
+# bash buys nothing. We group semantically-near concepts so the scheduler
+# can prefer cross-cluster variety without shuffling unrelated topics.
+CONFUSABLE_CLUSTERS: dict[str, set[str]] = {
+    "auth-and-sessions": {"jwt", "constant_time_compare", "cors_preflight"},
+    "python-iterators": {"generator_yield", "list_comprehension", "walrus"},
+    "python-gotchas": {
+        "mutable_default", "late_binding_closure", "is_vs_eq",
+        "copy_vs_deepcopy", "dict_order",
+    },
+    "python-concurrency": {
+        "async_def", "asyncio_taskgroup", "gil_decision", "race_condition",
+    },
+    "python-typing": {"typeddict", "protocol_vs_abc"},
+    "python-data-model": {"slots", "dataclass_frozen"},
+    "python-stdlib": {
+        "pathlib_path", "datetime_tz", "subprocess_shell", "logging_lazy",
+        "f_string_debug",
+    },
+    "scientific-python": {
+        "numpy_view_copy", "numpy_broadcasting", "pandas_settingwithcopy",
+        "torch_detach", "matplotlib_close",
+    },
+    "testing": {"pytest_fixture", "pytest_parametrize", "mock_patch_target"},
+    "sql": {"n_plus_one", "sql_null_semantics", "window_function"},
+    "frontend": {
+        "useeffect_deps", "react_keys", "ts_unknown_vs_any", "eq_eq_eq",
+    },
+    "shell-and-git": {"rebase_vs_merge", "set_pipefail", "find_xargs"},
+    "web-patterns": {"http_status_created", "retry_jitter", "depends"},
+    "python-error-handling": {"try_except", "context_manager_with"},
+    "caching": {"lru_cache"},
+}
+
+
+def _cluster_of(key: str) -> str | None:
+    for cluster, members in CONFUSABLE_CLUSTERS.items():
+        if key in members:
+            return cluster
+    return None
+
+
 def _is_overdue(concept_state: dict, now: float) -> bool:
     last = concept_state.get("last", 0.0)
     interval_days = concept_state.get("interval", 1)

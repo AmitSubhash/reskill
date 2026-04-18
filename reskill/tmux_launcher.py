@@ -91,10 +91,28 @@ def launch(claude_args: list[str]) -> int:
     try:
         if _inside_tmux():
             # Already in tmux: split current window for the quiz pane.
-            # Turn on mouse mode globally so the user can click to focus
-            # the quiz pane (safe -- this is idempotent).
+            # Mouse mode so the user can click to focus (idempotent).
             subprocess.run(
                 ["tmux", "set-option", "-g", "mouse", "on"],
+                check=False,
+            )
+            # Heavy borders + "both" indicators make focus unmistakable
+            # on tmux >= 3.3. Graceful no-op on older versions.
+            subprocess.run(
+                ["tmux", "set-option", "-g", "pane-border-lines", "heavy"],
+                check=False,
+            )
+            subprocess.run(
+                ["tmux", "set-option", "-g", "pane-border-indicators", "both"],
+                check=False,
+            )
+            # `prefix + r` -> jump focus to the quiz pane. Single keybind
+            # beats remembering which arrow direction.
+            subprocess.run(
+                [
+                    "tmux", "bind-key", "r",
+                    "select-pane", "-t", "{right-of}",
+                ],
                 check=False,
             )
             subprocess.run(
@@ -117,13 +135,15 @@ def launch(claude_args: list[str]) -> int:
              f"bash -c {_shell_quote(claude_cmd)}"],
             check=True,
         )
-        # Enable mouse mode for THIS session only so the user can click
-        # the quiz pane to focus it. The prefix+arrow way still works;
-        # the click is just friendlier.
-        subprocess.run(
-            ["tmux", "set-option", "-t", session, "mouse", "on"],
-            check=True,
-        )
+        # Session-local: mouse click to focus, heavy border indicators,
+        # and `prefix + r` = select right-pane.
+        for opt_cmd in (
+            ["set-option", "-t", session, "mouse", "on"],
+            ["set-option", "-t", session, "pane-border-lines", "heavy"],
+            ["set-option", "-t", session, "pane-border-indicators", "both"],
+            ["bind-key", "-T", "prefix", "r", "select-pane", "-t", "{right-of}"],
+        ):
+            subprocess.run(["tmux", *opt_cmd], check=False)
         subprocess.run(
             [
                 "tmux", "split-window", "-h", "-l", str(panel_cols),
