@@ -91,6 +91,55 @@ def _bell() -> None:
         pass
 
 
+# ───────── Semantic pane-border colors (state signal at the edge) ─────────
+#
+# Textual's design guide + WCAG: color is a signal layer, not the only
+# signal. We change the TMUX PANE BORDER to match the current state so
+# peripheral vision catches it without reading the box. Glyphs inside
+# the box (✓/✗, "new question incoming") remain the primary cue.
+#
+# Tmux colors are the 256-color palette; we approximate the Everforest
+# values we use inside the pane. Falls back silently when $TMUX is unset.
+
+_TMUX_COLORS = {
+    "idle": "colour240",     # dim ash
+    "arming": "colour179",   # gold
+    "question": "colour108",  # teal-green
+    "correct": "colour108",
+    "wrong": "colour167",    # rose
+}
+
+_last_border_state: str | None = None
+
+
+def _set_pane_border(state: str) -> None:
+    """Color the current tmux pane's border to reflect our state.
+
+    No-op if not inside tmux, or if the requested state is unchanged
+    (so we don't thrash the terminal with escape sequences).
+    """
+    global _last_border_state
+    if state == _last_border_state:
+        return
+    if not os.environ.get("TMUX"):
+        _last_border_state = state
+        return
+    color = _TMUX_COLORS.get(state, "colour240")
+    import subprocess
+    try:
+        subprocess.run(
+            [
+                "tmux", "select-pane", "-P",
+                f"fg={color}",
+            ],
+            check=False,
+            timeout=1,
+        )
+    except (subprocess.SubprocessError, FileNotFoundError, OSError):
+        pass
+    _last_border_state = state
+
+
 def _set_cbreak() -> list[int]:
     fd = sys.stdin.fileno()
     saved = termios.tcgetattr(fd)
@@ -183,6 +232,7 @@ def _render_footer(items: list[tuple[str, str]]) -> str:
 
 def _render_idle_card(session: SessionCounters, paced: pacing.PacingState) -> None:
     """Shown when Claude is not currently thinking."""
+    _set_pane_border("idle")
     _clear_screen()
     state = state_mod.load()
     source = "hooks" if have_reskill_hooks() else "transcript poll"
@@ -268,6 +318,7 @@ def _render_take_a_breath() -> None:
 
 
 def _render_question_view(question, state: state_mod.State, session: SessionCounters) -> None:
+    _set_pane_border("question")
     _clear_screen()
     sys.stdout.write("  " + session.badge() + "\n")
     sys.stdout.write(render_question(question, streak=state.streak, compact=True))
@@ -285,6 +336,7 @@ def _arming_pulse() -> None:
     Gives peripheral vision a chance to catch up instead of the box
     appearing mid-keystroke.
     """
+    _set_pane_border("arming")
     _clear_screen()
     bar = paint("\u2502 ", GOLD, BOLD) * 4
     lines = [
@@ -301,11 +353,31 @@ def _arming_pulse() -> None:
 
 
 def _wait_for_continue(max_wait: float = 8.0) -> None:
-    """Poll for any key, with the hint already rendered in the footer."""
+    """Poll for any key with a visible countdown so the user knows the
+    reveal isn't frozen. Anki's equivalent: the 60 s "you walked away"
+    timeout. 8 s keeps the reveal readable without forcing engagement.
+    """
     start = time.time()
-    while time.time() - start < max_wait:
+    last_shown = -1
+    while True:
+        remaining = int(max_wait - (time.time() - start))
+        if remaining <= 0:
+            break
+        if remaining != last_shown:
+            # Overwrite the footer's last-line "any key continue" hint
+            # with a live countdown. \r + \x1b[K clears the line.
+            line = paint(
+                f"  any key to continue  \u00b7  auto in {remaining}s",
+                ASH, DIM,
+            )
+            sys.stdout.write("\r\x1b[K" + line)
+            sys.stdout.flush()
+            last_shown = remaining
         if _read_key(timeout=0.3) is not None:
-            return
+            break
+    # Clear the countdown line so nothing lingers on the next render.
+    sys.stdout.write("\r\x1b[K")
+    sys.stdout.flush()
 
 
 # ───────── Main loop ─────────
@@ -412,6 +484,7 @@ def _quiz_loop_once(
         _clear_screen()
         if correct:
             session.correct += 1
+            _set_pane_border("correct")
             sys.stdout.write(
                 render_correct_flash(
                     pick.question,
@@ -433,6 +506,7 @@ def _quiz_loop_once(
             # was ALREADY a re-asked review, don't loop it forever.
             if pick.source != "review":
                 review.enqueue(pick.question)
+            _set_pane_border("wrong")
             sys.stdout.write(render_wrong_reveal(pick.question, chosen=label))
             sys.stdout.write("\n")
             sys.stdout.write(_render_footer(FOOTER_REVEAL_WRONG))
@@ -525,6 +599,18 @@ def run() -> int:
     except KeyboardInterrupt:
         return 0
     finally:
+        # Restore tmux pane border to the default color so the user
+        # doesn't see a weird color on whatever pane replaces this one.
+        if os.environ.get("TMUX"):
+            import subprocess
+            try:
+                subprocess.run(
+                    ["tmux", "select-pane", "-P", "fg=default"],
+                    check=False,
+                    timeout=1,
+                )
+            except (subprocess.SubprocessError, FileNotFoundError, OSError):
+                pass
         _show_cursor()
         if saved_tty is not None:
             _restore_tty(saved_tty)
