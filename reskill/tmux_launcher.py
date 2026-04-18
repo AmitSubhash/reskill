@@ -44,11 +44,58 @@ def _inside_tmux() -> bool:
 
 
 def _print_install_hint() -> None:
-    print(paint("  tmux is required for `reskill claude`", ASH))
-    print(paint("  install it once:", ASH, DIM))
-    print(paint("    brew install tmux", TEAL))
-    print(paint("  or use the git-log deck which works anywhere:", ASH, DIM))
-    print(paint("    reskill session", TEAL))
+    print(paint("  tmux is required for `reskill claude --tmux`", ASH))
+    print(paint("  either install tmux (`brew install tmux`) or", ASH, DIM))
+    print(paint("  just open a second terminal and run:", ASH, DIM))
+    print(paint("    reskill quiz-panel", TEAL))
+
+
+def _macos_spawn_quiz_window() -> bool:
+    """Open a second terminal WINDOW running `reskill quiz-panel`.
+
+    No tmux, no split-pane. The user's current terminal keeps running
+    whatever they like (usually `claude`), and the quiz pane lives in
+    its own window. Both processes coordinate via the thinking-flag file.
+
+    Returns True if a window was spawned, False if we couldn't figure
+    out how.
+    """
+    import platform
+
+    if platform.system() != "Darwin":
+        return False
+
+    term = os.environ.get("TERM_PROGRAM", "")
+    reskill_bin = shutil.which("reskill") or "reskill"
+
+    if term == "iTerm.app":
+        script = f'''
+            tell application "iTerm"
+                create window with default profile
+                tell current session of current window
+                    write text "{reskill_bin} quiz-panel"
+                end tell
+            end tell
+        '''
+    else:
+        # Default to Terminal.app -- works whether the user is there or
+        # running bare ssh/kitty/wezterm (osascript targets Terminal).
+        script = f'''
+            tell application "Terminal"
+                activate
+                do script "{reskill_bin} quiz-panel"
+            end tell
+        '''
+    try:
+        subprocess.run(
+            ["osascript", "-e", script],
+            check=True,
+            capture_output=True,
+            timeout=5,
+        )
+        return True
+    except (subprocess.SubprocessError, FileNotFoundError, OSError):
+        return False
 
 
 def launch(claude_args: list[str]) -> int:
@@ -71,6 +118,17 @@ def launch(claude_args: list[str]) -> int:
         return 127
 
     if not _have_tmux():
+        # No tmux? On macOS we can still give the user the split-window
+        # experience by opening a second Terminal.app / iTerm2 window
+        # with the quiz pane.
+        if _macos_spawn_quiz_window():
+            print(
+                paint("  reSkill", TEAL, BOLD),
+                paint("quiz pane opened in a new window", ASH),
+            )
+            print(paint("  starting claude here now...", ASH, DIM))
+            print()
+            os.execvp("claude", ["claude", *claude_args])
         _print_install_hint()
         return 127
 
