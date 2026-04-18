@@ -46,33 +46,49 @@ def _deck_from_commits(
     seen_ids: set[str],
     max_questions: int,
     concept_weights: dict[str, int] | None = None,
+    state: state_mod.State | None = None,
 ) -> list[tuple[Question, CommitInfo]]:
-    """Match each commit to a relevant template question.
+    """Match each commit to an SM-2 + interleaving-aware question.
 
-    When `concept_weights` is provided, concepts the user recently
-    touched in Claude Code sessions are tried first per commit.
+    Delegates to `scheduler.choose` so `reskill session` and the live
+    tmux quiz pane share the same evidence-based selection logic:
+    overdue > new > not-due within the pool, interleaved across
+    concepts, format-diverse.
     """
+    from . import scheduler as sched
+
     deck: list[tuple[Question, CommitInfo]] = []
     used_ids: set[str] = set(seen_ids)
     weights = concept_weights or {}
+    active_state = state or state_mod.load()
+    last_concept: str | None = None
+    recent_formats: list[str] = []
 
     for commit in commits:
-        haystack = commit.subject + "\n" + "\n".join(commit.added_lines[:400])
-        concepts = detect_concepts(haystack)
-        concepts.sort(
-            key=lambda c: (-weights.get(c, 0), random.random())
-        )
-        for concept in concepts:
-            bank = TEMPLATE_BANK.get(concept, [])
-            fresh = [q for q in bank if q.id not in used_ids]
-            if not fresh:
-                continue
-            chosen = random.choice(fresh)
-            deck.append((chosen, commit))
-            used_ids.add(chosen.id)
-            break
         if len(deck) >= max_questions:
             break
+        live_text = commit.subject + "\n" + "\n".join(commit.added_lines[:400])
+        # Apply the Stop-hook cache as a weak bias: if a concept is
+        # both mentioned here AND recently touched globally, bump it.
+        biased = live_text
+        for concept, score in weights.items():
+            if score > 0:
+                biased += "\n" + (concept.replace("_", " ") + " ") * min(score, 3)
+        pick = sched.choose(
+            live_text=biased,
+            commit_text="",
+            state=active_state,
+            seen_ids=used_ids,
+            last_concept=last_concept,
+            recent_formats=recent_formats,
+        )
+        if pick is None:
+            continue
+        deck.append((pick.question, commit))
+        used_ids.add(pick.question.id)
+        last_concept = pick.concept
+        recent_formats.append(pick.question.format)
+        recent_formats = recent_formats[-4:]
 
     return deck
 

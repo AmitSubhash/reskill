@@ -317,6 +317,7 @@ def _quiz_loop_once(
     paced: pacing.PacingState,
     review: ReviewQueue,
     last_concept: str | None,
+    recent_formats: list[str],
 ) -> str | None:
     """Serve one question (if pacing allows). Returns the concept served
     so the next call can interleave away from it."""
@@ -347,6 +348,7 @@ def _quiz_loop_once(
             state=state,
             seen_ids=seen,
             last_concept=last_concept,
+            recent_formats=recent_formats,
         )
         if pick is None:
             _render_take_a_breath()
@@ -364,6 +366,9 @@ def _quiz_loop_once(
     pacing.note_quiz_served(paced, pick.concept)
     pacing.save(paced)
     session.served += 1
+    recent_formats.append(pick.question.format)
+    while len(recent_formats) > 4:
+        recent_formats.pop(0)
     # Tick AFTER choosing so the newly-served item doesn't immediately
     # decrement its own countdown.
     review.tick()
@@ -490,6 +495,7 @@ def run() -> int:
 
     last_render = ""   # 'idle' | 'question' | 'reveal'
     last_concept: str | None = None
+    recent_formats: list[str] = []
 
     try:
         was_thinking = False
@@ -503,7 +509,8 @@ def run() -> int:
             if thinking:
                 state = state_mod.load()
                 last_concept = _quiz_loop_once(
-                    state, session, paced, review, last_concept,
+                    state, session, paced, review,
+                    last_concept, recent_formats,
                 )
             else:
                 if last_render != "idle":

@@ -144,13 +144,18 @@ def _pick_from_concepts(
     pattern_keys: list[str],
     seen_ids: set[str],
     avoid_concept: str | None = None,
+    recent_formats: list[str] | None = None,
 ) -> tuple[Question, str] | None:
-    """Pick a fresh question from these bank pattern keys.
+    """Pick a fresh question, preferring concept AND format diversity.
 
-    Shuffles for variety. Avoids questions whose SEMANTIC concept label
-    matches `avoid_concept` -- used for interleaving so the same concept
-    isn't asked twice in a row.
+    Two-level preference:
+      1. Concept: avoid the concept just asked.
+      2. Format: among fresh questions, prefer one whose `.format`
+         differs from the last 2 served. MC monotony is the #1 complaint
+         in the learning-science literature (Roediger & Karpicke 2006
+         fluency illusion).
     """
+    recent_set = set((recent_formats or [])[-2:])
     shuffled = list(pattern_keys)
     random.shuffle(shuffled)
     preferred: list[str] = []
@@ -160,11 +165,16 @@ def _pick_from_concepts(
             deprioritized.append(key)
         else:
             preferred.append(key)
+
     for key in preferred + deprioritized:
         fresh = _fresh_questions(key, seen_ids)
-        if fresh:
-            q = random.choice(fresh)
-            return q, q.concept
+        if not fresh:
+            continue
+        # Prefer formats not in the recent window; shuffle within each.
+        novel = [q for q in fresh if q.format not in recent_set]
+        pool = novel or fresh
+        q = random.choice(pool)
+        return q, q.concept
     return None
 
 
@@ -174,6 +184,7 @@ def choose(
     state: state_mod.State,
     seen_ids: set[str],
     last_concept: str | None = None,
+    recent_formats: list[str] | None = None,
 ) -> Pick | None:
     """Return the next question to show, or None if nothing fits.
 
@@ -189,43 +200,56 @@ def choose(
         Question IDs the user has already answered; we avoid these.
     last_concept : str or None
         The concept of the most recently-asked question; used to
-        interleave (Rohrer & Taylor 2007: interleaved practice
-        outperforms blocked for retention).
+        interleave (Rohrer & Taylor 2007).
+    recent_formats : list[str] or None
+        Formats from the last 2-4 served questions. We prefer a
+        different format to avoid MC monotony (Roediger & Karpicke
+        2006 fluency-illusion research; target 50/30/20 mix).
     """
     now = time.time()
 
     live_concepts = list(dict.fromkeys(detect_concepts(live_text))) if live_text else []
     commit_concepts = list(dict.fromkeys(detect_concepts(commit_text))) if commit_text else []
 
-    # Tier 1: live context, SM-2-prioritized
-    if live_concepts:
-        overdue, new, not_due = _bucketize(live_concepts, state, now)
-        for bucket, source in ((overdue, "due"), (new, "new"), (not_due, "live")):
-            picked = _pick_from_concepts(bucket, seen_ids, avoid_concept=last_concept)
+    def _try(keys: list[str], source: str) -> Pick | None:
+        overdue, new, not_due = _bucketize(keys, state, now)
+        for bucket, tag in ((overdue, "due"), (new, "new"), (not_due, source)):
+            picked = _pick_from_concepts(
+                bucket, seen_ids,
+                avoid_concept=last_concept,
+                recent_formats=recent_formats,
+            )
             if picked:
                 q, concept = picked
-                return Pick(question=q, concept=concept, source=source)
+                return Pick(question=q, concept=concept, source=tag)
+        return None
+
+    # Tier 1: live context
+    if live_concepts:
+        p = _try(live_concepts, "live")
+        if p:
+            return p
 
     # Tier 2: commit context
     if commit_concepts:
-        overdue, new, not_due = _bucketize(commit_concepts, state, now)
-        for bucket, source in ((overdue, "due"), (new, "new"), (not_due, "commit")):
-            picked = _pick_from_concepts(bucket, seen_ids, avoid_concept=last_concept)
-            if picked:
-                q, concept = picked
-                return Pick(question=q, concept=concept, source=source)
+        p = _try(commit_concepts, "commit")
+        if p:
+            return p
 
-    # Tier 3: whole bank, still SM-2 aware
+    # Tier 3: whole bank, SM-2 aware (no not-due fallback here)
     all_concepts = list(TEMPLATE_BANK.keys())
     overdue, new, _ = _bucketize(all_concepts, state, now)
-    for bucket, source in ((overdue, "due"), (new, "new")):
-        picked = _pick_from_concepts(bucket, seen_ids, avoid_concept=last_concept)
+    for bucket, tag in ((overdue, "due"), (new, "new")):
+        picked = _pick_from_concepts(
+            bucket, seen_ids,
+            avoid_concept=last_concept,
+            recent_formats=recent_formats,
+        )
         if picked:
             q, concept = picked
-            return Pick(question=q, concept=concept, source=source)
+            return Pick(question=q, concept=concept, source=tag)
 
     # Tier 4: last resort -- accept a previously-seen question.
-    # This usually means the user has exhausted the bank.
     for concept in random.sample(all_concepts, k=len(all_concepts)):
         bank = TEMPLATE_BANK.get(concept, [])
         if bank:

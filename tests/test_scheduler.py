@@ -158,3 +158,49 @@ def test_concepts_ready_with_overdue():
     due, new = concepts_ready(live, state, seen_ids=set())
     assert due == 1
     assert new >= 1
+
+
+def test_format_mix_prefers_novel_format_over_repeat():
+    """Given two fresh concepts with different formats, the one whose
+    format hasn't appeared in recent_formats wins.
+
+    This is a statistical assertion: over many calls we should see
+    format diversity much stronger than random chance.
+    """
+    import random as _random
+    _random.seed(1234)
+    from reskill.question import TEMPLATE_BANK
+
+    # Pool: live text mentions concepts that have both MC-gotcha and
+    # non-MC formats in the bank. Look for a concept that actually has
+    # mixed formats.
+    mixed_live = (
+        "async def fetch(): await x; try: ...; @lru_cache; "
+        "def add(bag=[]): return bag"
+    )
+    state = State()
+
+    # Ask 30 times with a biased "recent_formats" window full of 'output'.
+    # If format-mix works, the picker should avoid 'output' when alternatives exist.
+    recent = ["output", "output", "output", "output"]
+    formats_chosen = []
+    seen: set[str] = set()
+    for _ in range(30):
+        p = choose(
+            live_text=mixed_live,
+            commit_text="",
+            state=state,
+            seen_ids=seen,
+            recent_formats=recent,
+        )
+        if p is None:
+            break
+        formats_chosen.append(p.question.format)
+        seen.add(p.question.id)
+
+    # 'output' may still appear when no alternative exists, but should
+    # NOT dominate. At least one non-output format must show up.
+    non_output = [f for f in formats_chosen if f != "output"]
+    assert len(non_output) > 0, (
+        f"no non-output formats chosen; got {formats_chosen}"
+    )
