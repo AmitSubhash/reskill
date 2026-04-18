@@ -18,7 +18,7 @@ import termios
 import time
 import tty
 
-from .inline_box import render_answer_reveal, render_question
+from .inline_box import render_correct_flash, render_question, render_wrong_reveal
 from .palette import (
     BOLD,
     DIM,
@@ -276,7 +276,13 @@ def run() -> None:
             label, xp = _read_answer(q, answer_timeout, state)
             state_mod.save(state)
 
-            _stdout_write(render_answer_reveal(q, label, xp))
+            # Mirror wrap.py behavior: correct -> flash, wrong -> reveal
+            if label is not None and label == q.correct_label:
+                _stdout_write(render_correct_flash(
+                    q, streak=state.streak, combo=state.combo, xp_earned=xp,
+                ))
+            else:
+                _stdout_write(render_wrong_reveal(q, chosen=label))
 
             # Short reveal pause so the explanation registers
             time.sleep(1.0)
