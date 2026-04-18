@@ -90,7 +90,7 @@ def launch(claude_args: list[str]) -> int:
 
     try:
         if _inside_tmux():
-            # Already in tmux: split the current window rather than nest.
+            # Already in tmux: split current window for the quiz pane.
             subprocess.run(
                 [
                     "tmux", "split-window", "-h", "-l", str(panel_cols), "-d",
@@ -98,9 +98,11 @@ def launch(claude_args: list[str]) -> int:
                 ],
                 check=True,
             )
-            # Replace this shell with claude. When claude exits, tmux will
-            # close the pane; if our sibling is configured to die, it does.
-            os.execvp("claude", ["claude", *claude_args])
+            # Wrap claude so exiting kills the whole window (tears down the
+            # now-orphaned quiz pane). Without this the user is left with
+            # just a quiz pane after finishing their Claude work.
+            wrapper = f"claude {quoted_args}; tmux kill-window"
+            os.execvp("bash", ["bash", "-lc", wrapper])
 
         # Fresh nested session path. Use new-session with the claude command
         # so the session auto-terminates when claude exits.
