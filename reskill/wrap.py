@@ -39,11 +39,34 @@ from . import state as state_mod
 # ANSI escape / OSC stripper
 _ANSI_RE = re.compile(rb"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\].*?(?:\x07|\x1b\\)", re.DOTALL)
 
-# Braille spinner frames Claude Code emits while thinking
+# Braille spinner frames (used by some Claude Code versions and our demo)
 _SPINNER_BYTES = {
     c.encode("utf-8")
     for c in "\u280b\u2819\u2839\u2838\u283c\u2834\u2826\u2827\u2807\u280f"
 }
+
+# Thinking-state keywords Claude Code emits (v2.1.x uses these with ●/+ bullets).
+# We match case-insensitively on the stripped bytes.
+_THINKING_KEYWORDS = [
+    b"thinking",        # "Thinking", "thinking with xhigh effort"
+    b"reticulating",    # Claude's spinner verb
+    b"cogitating",
+    b"pondering",
+    b"ruminating",
+    b"deliberating",
+    b"cerebrating",
+    b"noodling",
+    b"percolating",
+    b"machinating",
+    b"reading",         # reading files
+    b"searching",
+    b"analyzing",
+    b"planning",
+    b"crafting",
+    b"working",
+    b"hmm\xe2\x80\xa6",  # "Hmm…" (unicode ellipsis)
+    b"hmm...",
+]
 
 # Permission prompt detection patterns
 _PERMISSION_MARKERS = [
@@ -103,11 +126,28 @@ def _set_winsize(fd: int, rows: int, cols: int) -> None:
         pass
 
 
-def _looks_like_spinner(data: bytes) -> bool:
-    """True if `data` is mostly spinner frames (low content churn)."""
-    has_spinner = any(s in data for s in _SPINNER_BYTES)
+def _is_thinking(data: bytes, recent_raw: bytes) -> bool:
+    """Heuristic: is the child currently in a 'thinking' state?
+
+    True if either:
+      - the data contains a known braille spinner frame (demo or older CC), OR
+      - the recent output contains a thinking keyword ("Thinking",
+        "Reticulating", "Reading", etc.) -- Claude Code v2.1+ pattern.
+
+    AND the new content chunk is small (not a burst of real response tokens).
+    """
     stripped = _ANSI_RE.sub(b"", data)
-    return has_spinner and len(stripped) < 80
+    if len(stripped) > 400:
+        # Burst of real content -- response is probably streaming now.
+        return False
+
+    has_spinner = any(s in data for s in _SPINNER_BYTES)
+    if has_spinner:
+        return True
+
+    # Check the recent window (last ~1.5KB) for thinking keywords, case-insensitive.
+    window = recent_raw[-1500:].lower()
+    return any(kw in window for kw in _THINKING_KEYWORDS)
 
 
 def _detect_permission_prompt(recent_text: bytes) -> bool:
@@ -217,8 +257,8 @@ def wrap(argv: list[str], quizzes_enabled: bool = True) -> int:
                     )
 
                 # If we're waiting for an answer, buffer real content
-                # (let spinner frames through to the user still sees Claude alive)
-                if awaiting_answer and not _looks_like_spinner(data):
+                # (let spinner/thinking frames through so the user still sees Claude alive)
+                if awaiting_answer and not _is_thinking(data, bytes(recent_raw)):
                     pending_output.extend(data)
                 else:
                     os.write(sys.stdout.fileno(), data)
@@ -239,7 +279,7 @@ def wrap(argv: list[str], quizzes_enabled: bool = True) -> int:
                     and not awaiting_answer
                     and now > reveal_until
                     and (now - last_quiz_at) > cfg.min_seconds_between_quizzes
-                    and _looks_like_spinner(data)
+                    and _is_thinking(data, bytes(recent_raw))
                 ):
                     window = _build_context_window(content_buffer)
                     seen = set(state.seen_questions)
