@@ -1,8 +1,8 @@
-"""Install / uninstall reskill's Stop hook into ~/.claude/settings.json.
+"""Install / uninstall reskill hooks into ~/.claude/settings.json.
 
-Idempotent: detects reskill's hook by the literal marker string
-"reskill log-session" and won't double-install. Uninstall removes only
-the reskill entry, leaving other Stop hooks untouched.
+Claude Code currently expects hook events under the top-level ``hooks``
+object. reskill keeps its entries isolated there and removes only the
+reskill-owned handlers on uninstall, leaving unrelated hooks untouched.
 """
 
 from __future__ import annotations
@@ -14,12 +14,14 @@ from pathlib import Path
 
 from .palette import ASH, BOLD, DARK_ASH, DIM, SAGE, paint
 
-
 SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
 HOOK_MARKER = "reskill log-session"
 THINKING_MARKER = "reskill-thinking-flag"
 STATE_DIR = Path.home() / ".reskill" / "state"
 THINKING_FILE = STATE_DIR / "thinking"
+THINKING_ON_COMMAND = f"mkdir -p {STATE_DIR} && touch {THINKING_FILE}"
+THINKING_OFF_COMMAND = f"rm -f {THINKING_FILE}"
+HOOK_EVENTS = ("Stop", "PreToolUse", "PostToolUse", "UserPromptSubmit")
 
 
 def _find_reskill_binary() -> str:
@@ -42,14 +44,10 @@ def _build_log_hook() -> dict:
 
 
 def _build_thinking_on_hook() -> dict:
-    """PreToolUse hook: signal Claude is mid-thought. Marker lets us find
-    and remove this entry on uninstall."""
+    """Signal Claude is mid-thought."""
     return {
         "type": "command",
-        "command": (
-            f"mkdir -p {STATE_DIR} && touch {THINKING_FILE} "
-            f"# {THINKING_MARKER}"
-        ),
+        "command": THINKING_ON_COMMAND,
         "timeout": 2,
         "async": True,
     }
@@ -59,7 +57,7 @@ def _build_thinking_off_hook() -> dict:
     """Stop hook + PostToolUse: clear the thinking signal."""
     return {
         "type": "command",
-        "command": f"rm -f {THINKING_FILE} # {THINKING_MARKER}",
+        "command": THINKING_OFF_COMMAND,
         "timeout": 2,
         "async": True,
     }
@@ -88,20 +86,114 @@ def _save_settings(settings: dict) -> None:
 
 def _is_reskill_hook(hook: dict) -> bool:
     cmd = hook.get("command", "")
-    return HOOK_MARKER in cmd or THINKING_MARKER in cmd
+    return (
+        HOOK_MARKER in cmd
+        or THINKING_MARKER in cmd
+        or cmd.startswith(THINKING_ON_COMMAND)
+        or cmd.startswith(THINKING_OFF_COMMAND)
+    )
 
 
 def _has_any_reskill_hook(settings: dict) -> bool:
-    for event in ("Stop", "PreToolUse", "PostToolUse"):
-        for entry in settings.get(event, []):
-            if any(_is_reskill_hook(h) for h in entry.get("hooks", [])):
+    for event in HOOK_EVENTS:
+        for entry in _iter_event_entries(settings, event):
+            if any(_is_reskill_hook(hook) for hook in entry.get("hooks", [])):
                 return True
     return False
 
 
-def _append_hook(settings: dict, event: str, hook: dict) -> None:
-    arr = settings.setdefault(event, [])
-    arr.append({"matcher": "*", "hooks": [hook]})
+def _hooks_root(settings: dict) -> dict:
+    hooks = settings.setdefault("hooks", {})
+    if not isinstance(hooks, dict):
+        print(
+            paint('  reskill: ~/.claude/settings.json has a non-object "hooks" field', ASH),
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    return hooks
+
+
+def _iter_event_entries(settings: dict, event: str) -> list[dict]:
+    entries: list[dict] = []
+
+    hooks = settings.get("hooks")
+    if isinstance(hooks, dict):
+        nested = hooks.get(event, [])
+        if isinstance(nested, list):
+            entries.extend(nested)
+
+    legacy = settings.get(event, [])
+    if isinstance(legacy, list):
+        entries.extend(legacy)
+
+    return entries
+
+
+def _append_hook(settings: dict, event: str, hook: dict, matcher: str | None = None) -> None:
+    arr = _hooks_root(settings).setdefault(event, [])
+    entry = {"hooks": [hook]}
+    if matcher is not None:
+        entry["matcher"] = matcher
+    arr.append(entry)
+
+
+def _remove_reskill_hooks(settings: dict) -> bool:
+    removed = False
+
+    hooks = settings.get("hooks")
+    if isinstance(hooks, dict):
+        for event in HOOK_EVENTS:
+            arr = hooks.get(event, [])
+            if not isinstance(arr, list):
+                continue
+
+            cleaned: list[dict] = []
+            any_removed_here = False
+            for entry in arr:
+                orig = entry.get("hooks", [])
+                kept = [hook for hook in orig if not _is_reskill_hook(hook)]
+                if len(kept) != len(orig):
+                    any_removed_here = True
+                if kept:
+                    cleaned_entry = dict(entry)
+                    cleaned_entry["hooks"] = kept
+                    cleaned.append(cleaned_entry)
+
+            if any_removed_here:
+                removed = True
+                if cleaned:
+                    hooks[event] = cleaned
+                else:
+                    hooks.pop(event, None)
+
+        if not hooks:
+            settings.pop("hooks", None)
+
+    for event in HOOK_EVENTS:
+        arr = settings.get(event)
+        if not isinstance(arr, list):
+            continue
+
+        cleaned: list[dict] = []
+        any_removed_here = False
+        for entry in arr:
+            orig = entry.get("hooks", [])
+            kept = [hook for hook in orig if not _is_reskill_hook(hook)]
+            if len(kept) != len(orig):
+                any_removed_here = True
+            if kept:
+                cleaned_entry = dict(entry)
+                cleaned_entry["hooks"] = kept
+                cleaned.append(cleaned_entry)
+
+        if any_removed_here:
+            removed = True
+            if cleaned:
+                settings[event] = cleaned
+            else:
+                settings.pop(event, None)
+
+    return removed
 
 
 WRAPPER_SCRIPT_PATH = Path.home() / ".claude" / "reskill-statusline-wrapper.sh"
@@ -150,13 +242,14 @@ def install(with_statusline: bool = True, compose_statusline: bool = True) -> in
     settings = _load_settings()
     already = _has_any_reskill_hook(settings)
     if already:
-        print(paint("  reskill hooks already installed", ASH, DIM))
-    else:
-        _append_hook(settings, "Stop", _build_log_hook())
-        _append_hook(settings, "Stop", _build_thinking_off_hook())
-        _append_hook(settings, "UserPromptSubmit", _build_thinking_on_hook())
-        _append_hook(settings, "PreToolUse", _build_thinking_on_hook())
-        _append_hook(settings, "PostToolUse", _build_thinking_off_hook())
+        _remove_reskill_hooks(settings)
+        print(paint("  reskill hooks refreshed", ASH, DIM))
+
+    _append_hook(settings, "Stop", _build_log_hook())
+    _append_hook(settings, "Stop", _build_thinking_off_hook())
+    _append_hook(settings, "UserPromptSubmit", _build_thinking_on_hook())
+    _append_hook(settings, "PreToolUse", _build_thinking_on_hook(), matcher="*")
+    _append_hook(settings, "PostToolUse", _build_thinking_off_hook(), matcher="*")
 
     existing_sl = settings.get("statusLine", {}) if with_statusline else {}
     existing_cmd = existing_sl.get("command", "") if isinstance(existing_sl, dict) else ""
@@ -205,22 +298,7 @@ def install(with_statusline: bool = True, compose_statusline: bool = True) -> in
 def uninstall() -> int:
     """Remove every reskill hook entry and the statusLine. Safe if absent."""
     settings = _load_settings()
-    removed = False
-    for event in ("Stop", "PreToolUse", "PostToolUse", "UserPromptSubmit"):
-        arr = settings.get(event, [])
-        cleaned: list[dict] = []
-        any_removed_here = False
-        for entry in arr:
-            orig = entry.get("hooks", [])
-            kept = [h for h in orig if not _is_reskill_hook(h)]
-            if len(kept) != len(orig):
-                any_removed_here = True
-            if kept:
-                entry["hooks"] = kept
-                cleaned.append(entry)
-        if any_removed_here:
-            removed = True
-            settings[event] = cleaned
+    removed = _remove_reskill_hooks(settings)
 
     sl = settings.get("statusLine", {})
     if isinstance(sl, dict):
