@@ -29,6 +29,9 @@ class State:
     enabled: bool = True   # global on/off; toggled via `reskill pause`/`resume`
     daily_goal: int = 5    # questions per day to count toward streak
     history: dict[str, int] = field(default_factory=dict)  # "YYYY-MM-DD" -> answered count
+    # IDs of questions answered incorrectly recently. Capped at 50 so
+    # `reskill review` has a bounded drill set without drifting forever.
+    recent_wrongs: list[str] = field(default_factory=list)
     # concepts[concept_key] = {"ef": 2.5, "interval": 1, "reps": 0, "last": 0.0, "correct": 0, "total": 0}
 
     @property
@@ -138,6 +141,12 @@ def record_answer(s: State, question_id: str, concept: str, correct: bool, base_
         c["reps"] = 0
         c["interval"] = 1
         c["ef"] = max(1.3, c["ef"] - 0.2)
+        # Track for reskill review. De-dupe by moving the ID to the
+        # end so the most recently-missed questions are drilled first.
+        if question_id in s.recent_wrongs:
+            s.recent_wrongs.remove(question_id)
+        s.recent_wrongs.append(question_id)
+        s.recent_wrongs = s.recent_wrongs[-50:]
         return 0
 
 

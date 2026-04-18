@@ -5,6 +5,7 @@ Usage:
   reskill quiz-panel           the pane itself (usually spawned by `claude`)
   reskill session [--since 7d] quiz deck built from your recent commits
   reskill next                 serve one context-matched quiz right now
+  reskill review               drill your recently-missed questions
   reskill install              install the Claude Code hooks (PreToolUse,
                                PostToolUse, Stop) that signal the quiz pane
   reskill uninstall            remove the hooks
@@ -189,6 +190,9 @@ def main(argv: list[str] | None = None) -> int:
     if cmd == "next":
         from . import next_cmd
         return next_cmd.run()
+    if cmd == "review":
+        from . import review_cmd
+        return review_cmd.run()
     if cmd == "install":
         from . import hookinstall
         return hookinstall.install()
