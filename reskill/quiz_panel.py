@@ -36,6 +36,7 @@ import tty
 from pathlib import Path
 
 from . import state as state_mod
+from .activity import have_reskill_hooks, is_claude_active
 from .git_diffs import fetch_commits, project_root
 from .inline_box import (
     render_correct_flash,
@@ -43,7 +44,7 @@ from .inline_box import (
     render_wrong_reveal,
 )
 from .log_session import CACHE_ROOT, _load_cache, _project_hash
-from .palette import ASH, BOLD, DARK_ASH, DIM, GOLD, SAGE, STONE, TEAL, paint
+from .palette import ASH, BOLD, DARK_ASH, DIM, GOLD, SAGE, TEAL, paint
 from .question import Question, TEMPLATE_BANK, detect_concepts, generate_question
 
 
@@ -111,12 +112,11 @@ _IDLE_GRACE_SECONDS = 6.0
 def _is_thinking() -> bool:
     """True if Claude is actively mid-thought OR went idle very recently.
 
-    The hooks toggle the flag several times per turn (PostToolUse clears
-    it between Pre/PostToolUse pairs), so a naive check would bounce the
-    UI in and out. We treat the file as 'still thinking' if it existed
-    within the last few seconds, via a sidecar timestamp.
+    Uses activity.is_claude_active(), which prefers the hook flag when
+    available and falls back to transcript-mtime polling otherwise.
+    Grace-period smooths over the flicker between tool calls.
     """
-    if THINKING_FILE.exists():
+    if is_claude_active(cwd=os.getcwd()):
         _mark_active()
         return True
     last = _last_active()
@@ -141,6 +141,7 @@ def _render_idle_card() -> None:
     """Shown when Claude is not currently thinking."""
     _clear_screen()
     state = state_mod.load()
+    source = "hooks" if have_reskill_hooks() else "transcript poll"
     lines = [
         "",
         "  " + paint("reSkill", TEAL, BOLD),
@@ -150,9 +151,19 @@ def _render_idle_card() -> None:
         + paint(" streak", ASH, DIM)
         + paint(f"   {state.correct_today}/{state.daily_goal} today", SAGE),
         "",
-        "  " + paint("press q to exit this pane", DARK_ASH, DIM),
-        "",
+        "  " + paint(f"signal: {source}", DARK_ASH, DIM),
     ]
+    if source != "hooks":
+        lines.append(
+            "  " + paint(
+                "tip: run `reskill install` for precise timing", DARK_ASH, DIM
+            )
+        )
+    lines.extend([
+        "",
+        "  " + paint("q to exit the pane", DARK_ASH, DIM),
+        "",
+    ])
     sys.stdout.write("\n".join(lines))
     sys.stdout.flush()
 

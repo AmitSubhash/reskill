@@ -163,14 +163,26 @@ def _shell_quote(arg: str) -> str:
 def ensure_banner() -> None:
     """Print a one-line 'reSkill is live' banner before attaching.
 
-    Useful when a user runs `reskill claude` directly and wants a visible
-    signal that our wrapper is in play.
+    Also nudges the user if the hooks aren't installed, since the quiz
+    pane works better with them (it still falls back to transcript
+    polling, but the hook signal is faster and cleaner).
     """
+    from .activity import have_reskill_hooks
+
     print()
     print(
         paint("  reSkill", TEAL, BOLD),
         paint("launching claude with a quiz pane alongside", ASH),
     )
+    if not have_reskill_hooks():
+        print(
+            paint(
+                "  heads up: `reskill install` not run yet -- quiz pane "
+                "will use transcript polling as a fallback signal",
+                DARK_ASH,
+                DIM,
+            )
+        )
     print(
         paint(
             "  exit claude (Ctrl+C or /exit) to leave the session",
