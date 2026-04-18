@@ -30,6 +30,7 @@ from pathlib import Path
 from . import pacing
 from . import scheduler
 from . import state as state_mod
+from .review_queue import ReviewQueue
 from .activity import have_reskill_hooks, is_claude_active, recent_transcript_text
 from .git_diffs import fetch_commits, project_root
 from .inline_box import (
@@ -314,33 +315,44 @@ def _quiz_loop_once(
     state: state_mod.State,
     session: SessionCounters,
     paced: pacing.PacingState,
+    review: ReviewQueue,
     last_concept: str | None,
 ) -> str | None:
     """Serve one question (if pacing allows). Returns the concept served
     so the next call can interleave away from it."""
     seen = set(state.seen_questions)
     project = project_root()
-    live_text = recent_transcript_text(cwd=os.getcwd() or project)
 
-    commit_text = ""
-    if project:
-        commits = fetch_commits("7d", cwd=project, limit=10)
-        commit_text = "\n".join(
-            c.subject + "\n" + "\n".join(c.added_lines[:60]) for c in commits
+    # The review queue gets first crack: any wrong/skipped question that
+    # has waited out its countdown re-appears here. Butler & Roediger 2008:
+    # same-session relearning strongly improves retention of the item.
+    question_from_review = review.ready()
+    if question_from_review is not None:
+        pick = scheduler.Pick(
+            question=question_from_review,
+            concept=question_from_review.concept,
+            source="review",
         )
+    else:
+        live_text = recent_transcript_text(cwd=os.getcwd() or project)
+        commit_text = ""
+        if project:
+            commits = fetch_commits("7d", cwd=project, limit=10)
+            commit_text = "\n".join(
+                c.subject + "\n" + "\n".join(c.added_lines[:60]) for c in commits
+            )
+        pick = scheduler.choose(
+            live_text=live_text,
+            commit_text=commit_text,
+            state=state,
+            seen_ids=seen,
+            last_concept=last_concept,
+        )
+        if pick is None:
+            _render_take_a_breath()
+            return last_concept
 
-    pick = scheduler.choose(
-        live_text=live_text,
-        commit_text=commit_text,
-        state=state,
-        seen_ids=seen,
-        last_concept=last_concept,
-    )
-    if pick is None:
-        _render_take_a_breath()
-        return last_concept
-
-    # Pacing gate
+    # Pacing gate (review items still obey the rate limit).
     gate = pacing.can_fire_now(paced, candidate_concept=pick.concept)
     if not gate.allowed:
         _render_idle_card(session, paced)
@@ -352,6 +364,9 @@ def _quiz_loop_once(
     pacing.note_quiz_served(paced, pick.concept)
     pacing.save(paced)
     session.served += 1
+    # Tick AFTER choosing so the newly-served item doesn't immediately
+    # decrement its own countdown.
+    review.tick()
     _render_question_view(pick.question, state, session)
 
     deadline = time.time() + 45.0
@@ -406,6 +421,13 @@ def _quiz_loop_once(
             time.sleep(1.2)
         else:
             session.wrong += 1
+            # Re-queue the missed question for this session. The
+            # forgetting curve shows the first few minutes are when
+            # retention drops fastest -- re-asking 3 questions later
+            # locks in the correction. First-time misses only; if this
+            # was ALREADY a re-asked review, don't loop it forever.
+            if pick.source != "review":
+                review.enqueue(pick.question)
             sys.stdout.write(render_wrong_reveal(pick.question, chosen=label))
             sys.stdout.write("\n")
             sys.stdout.write(_render_footer(FOOTER_REVEAL_WRONG))
@@ -419,7 +441,10 @@ def _quiz_loop_once(
             # Keep seen_questions so the ID won't recur today.
             state.seen_questions.append(pick.question.id)
             state_mod.save(state)
-        # 'later' and 'skip' just roll forward.
+        elif dismissal == "later" and pick.source != "review":
+            # 'later' = push back in this session; come around again.
+            review.enqueue(pick.question, priority=5)
+        # 'skip' just rolls forward.
         if dismissal in ("skip", "bury"):
             _clear_screen()
             sys.stdout.write(render_wrong_reveal(pick.question, chosen=None))
@@ -456,6 +481,7 @@ def run() -> int:
 
     session = SessionCounters()
     paced = pacing.load()
+    review = ReviewQueue()
 
     saved_tty = None
     if sys.stdin.isatty():
@@ -477,7 +503,7 @@ def run() -> int:
             if thinking:
                 state = state_mod.load()
                 last_concept = _quiz_loop_once(
-                    state, session, paced, last_concept,
+                    state, session, paced, review, last_concept,
                 )
             else:
                 if last_render != "idle":

@@ -56,20 +56,30 @@ def load() -> State:
 
     today = date.today().isoformat()
     if s.last_date != today:
-        # Day rollover
+        # Day rollover.
+        # Streaks are kept visible because developers like the number,
+        # but we removed the loss-aversion lever. Orosz et al. 2023 and
+        # Self-Determination Theory both show that punitive streaks
+        # reduce intrinsic motivation in adult learners even when they
+        # raise short-term engagement. Rules:
+        #   - Hitting the daily goal extends the streak.
+        #   - Missing the goal does NOT zero the streak; we just
+        #     pause it. Come back anytime -- the streak continues
+        #     from where you left off.
+        #   - Weekends don't count against you either way.
         if s.last_date:
             last = date.fromisoformat(s.last_date)
             if s.answered_today > 0:
                 s.history[s.last_date] = s.answered_today
             gap = (date.today() - last).days
             met_goal = s.answered_today >= s.daily_goal
+            was_weekend = last.weekday() >= 5
             if gap == 1 and met_goal:
                 s.streak += 1
-            elif gap >= 1 and not met_goal:
-                if s.freezes > 0:
-                    s.freezes -= 1
-                else:
-                    s.streak = 0
+            # Implicit: no branch that zeros the streak. Pausing is the
+            # only failure mode; freezes are kept for cosmetic display.
+            if gap >= 2 and not was_weekend and not met_goal and s.freezes > 0:
+                s.freezes -= 1
         s.xp_today = 0
         s.correct_today = 0
         s.answered_today = 0

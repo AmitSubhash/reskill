@@ -5,35 +5,60 @@ from __future__ import annotations
 from datetime import date, timedelta
 
 from . import state as state_mod
-from .palette import ASH, BOLD, DARK_ASH, DIM, GOLD, INK, SAGE, STONE, paint
+from .palette import ASH, BOLD, DARK_ASH, DIM, GOLD, SAGE, STONE, paint
+
+
+def _concepts_mastered(s: state_mod.State, threshold: float = 0.75) -> int:
+    """Count concepts with mastery >= threshold.
+
+    Promoted as the primary metric over streak to align with
+    Self-Determination Theory: competence > compliance. An item counts
+    as "mastered" when the running correct/total ratio is high enough
+    and it has been answered at least twice.
+    """
+    n = 0
+    for data in s.concepts.values():
+        total = data.get("total", 0)
+        correct = data.get("correct", 0)
+        if total >= 2 and (correct / total) >= threshold:
+            n += 1
+    return n
 
 
 def render_status(plain: bool = False) -> str:
-    """One-line summary: streak + today's progress.
+    """One-line summary: concepts mastered + today's progress + streak.
 
-    Parameters
-    ----------
-    plain : bool
-        If True, emit ASCII-only without ANSI colors (for $PS1 safety).
-
-    Returns
-    -------
-    str
-        Single line, no trailing newline.
+    Concept mastery is first because it's the retention-aligned metric;
+    streak is kept but demoted.
     """
     s = state_mod.load()
+    mastered = _concepts_mastered(s)
     fire = "*" if plain else "\U0001f525"
+    tilde = "~" if plain else "\u223c"
     sep = "  " if plain else "  \u00b7  "
-    streak_bit = f"{fire} {s.streak}" if s.streak > 0 else f"{fire} --"
+
+    mastered_bit = f"{mastered} mastered"
     today_bit = f"{s.correct_today}/{s.daily_goal} today"
+    # Use a different character when the streak is "paused" (today has
+    # no answers yet and we've already missed the goal window). Never
+    # show a zero that looks punitive; the literature says that anxiety
+    # doesn't help adult learners.
+    if s.streak > 0 and s.correct_today == 0:
+        streak_bit = f"{tilde} {s.streak}"   # paused
+    elif s.streak > 0:
+        streak_bit = f"{fire} {s.streak}"
+    else:
+        streak_bit = f"{fire} --"
 
     if plain:
-        return f"{streak_bit}{sep}{today_bit}"
+        return f"{mastered_bit}{sep}{today_bit}{sep}{streak_bit}"
 
     return (
-        paint(streak_bit, GOLD, BOLD)
+        paint(mastered_bit, SAGE, BOLD)
         + paint(sep, DARK_ASH, DIM)
         + paint(today_bit, SAGE if s.correct_today >= s.daily_goal else STONE)
+        + paint(sep, DARK_ASH, DIM)
+        + paint(streak_bit, GOLD)
     )
 
 
@@ -74,13 +99,13 @@ def render_heatmap(weeks: int = 12) -> str:
         )
 
     totals = sum(s.history.values()) + s.answered_today
+    mastered = _concepts_mastered(s)
     summary = (
-        paint(f"  total answered: ", ASH, DIM)
-        + paint(str(totals), INK, BOLD)
-        + paint(f"    goal: {s.daily_goal}/day", ASH, DIM)
-        + paint(f"    streak: ", ASH, DIM)
-        + paint(f"{s.streak}", GOLD, BOLD)
-        + paint(f"    freezes: {s.freezes}", ASH, DIM)
+        paint("  ", ASH)
+        + paint(f"{mastered} concepts mastered", SAGE, BOLD)
+        + paint(f"    {totals} answered", ASH)
+        + paint(f"    streak {s.streak}", GOLD, DIM)
+        + paint(f"    goal {s.daily_goal}/day", ASH, DIM)
     )
     lines.append("")
     lines.append(summary)
