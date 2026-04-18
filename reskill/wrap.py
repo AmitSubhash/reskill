@@ -46,6 +46,7 @@ from .question import Question, generate_question
 # ───────── ANSI helpers ─────────
 
 CURSOR_SHOW = b"\x1b[?25h"
+CURSOR_HIDE = b"\x1b[?25l"
 
 _ANSI_RE = re.compile(rb"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\].*?(?:\x07|\x1b\\)", re.DOTALL)
 
@@ -237,15 +238,41 @@ def wrap(argv: list[str], quizzes_enabled: bool = True) -> int:
     def stdout_write(b: bytes) -> None:
         os.write(sys.stdout.fileno(), b)
 
+    def reset_ink_state() -> None:
+        """Make Claude Code's Ink forget its previous render position.
+
+        Why: Ink tracks `previousOutput` and uses cursor-up/erase to repaint
+        in place. When we inject a quiz box between Ink's frames, Ink's next
+        render reaches up into our box and clobbers it.
+
+        Claude Code's Ink calls `log.reset()` on the SIGCONT signal
+        (see src/ink/ink.tsx: `handleResume`). It explicitly says:
+          'Physical cursor position is unknown after external terminal
+           corruption. Clear displayCursor...'
+
+        We exploit this by sending SIGSTOP+SIGCONT to the child, which fires
+        Ink's reset handler. Next Ink render starts fresh from current cursor.
+        """
+        try:
+            os.kill(pid, signal.SIGSTOP)
+            # Tiny pause so the signal is delivered before we resume
+            time.sleep(0.02)
+            os.kill(pid, signal.SIGCONT)
+        except (OSError, ProcessLookupError):
+            pass
+
     def run_quiz(q: Question) -> None:
         """Show quiz inline, tick a single-line countdown, capture answer.
 
-        No screen clears. The box scrolls naturally into view; Claude's
-        prior output stays visible in scrollback. While we wait, we HOLD
-        Claude's new bytes so Ink's redraws don't scramble us. After we
-        finish, the held bytes are discarded and Ink repaints fresh.
+        Key trick: before and after the quiz, we send SIGSTOP+SIGCONT to
+        Claude Code's child process. Ink's SIGCONT handler resets its
+        `previousOutput` state so its next render can't reach up into our
+        box -- it starts fresh from the current cursor position.
         """
-        # Print the box ONCE. No re-renders.
+        # Make Ink forget where it was rendering, so our box is safe.
+        reset_ink_state()
+        # Drain any leftover pending master output before our write
+        stdout_write(b"\n")
         stdout_write(render_question(q, streak=state.streak).encode())
 
         deadline = time.time() + cfg.quiz_time_limit
@@ -337,13 +364,15 @@ def wrap(argv: list[str], quizzes_enabled: bool = True) -> int:
                 stdout_write(reveal)
                 time.sleep(cfg.wrong_reveal_ms / 1000.0)
 
-        # If a permission prompt (or turn-end) arrived during the quiz, flush
-        # the held bytes so the user can see Claude's message. Otherwise we
-        # discard; Ink will repaint fresh on its next frame.
+        # Flush or discard held bytes depending on what happened
         if skip_reason in ("permission", "turn_end"):
             if held_output:
                 stdout_write(bytes(held_output))
         held_output.clear()
+
+        # Reset Ink once more: its next render won't try to reach up into
+        # the quiz/reveal we just drew.
+        reset_ink_state()
 
     def nonlocal_set_mute() -> None:
         nonlocal session_muted
