@@ -36,6 +36,7 @@ from dataclasses import dataclass
 from . import state as state_mod
 from .inline_box import (
     render_correct_flash,
+    render_countdown_line,
     render_question,
     render_wrong_reveal,
 )
@@ -44,12 +45,7 @@ from .question import Question, generate_question
 
 # ───────── ANSI helpers ─────────
 
-CLEAR_SCREEN = b"\x1b[2J\x1b[H"    # Erase screen + cursor home
-CLEAR_BELOW = b"\x1b[J"            # Erase from cursor to end of screen
-CLEAR_LINE = b"\r\x1b[2K"          # Clear current line
-CURSOR_HIDE = b"\x1b[?25l"
 CURSOR_SHOW = b"\x1b[?25h"
-CURSOR_HOME = b"\x1b[H"
 
 _ANSI_RE = re.compile(rb"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\].*?(?:\x07|\x1b\\)", re.DOTALL)
 
@@ -241,20 +237,19 @@ def wrap(argv: list[str], quizzes_enabled: bool = True) -> int:
     def stdout_write(b: bytes) -> None:
         os.write(sys.stdout.fileno(), b)
 
-    def discard_held() -> None:
-        held_output.clear()
-
-    def exit_quiz_mode() -> None:
-        # Clear our box, restore cursor. Ink will repaint on next frame.
-        stdout_write(CLEAR_SCREEN + CURSOR_SHOW)
-        discard_held()
-
     def run_quiz(q: Question) -> None:
-        """Show quiz, count down, capture answer, flash/reveal. BLOCKING."""
-        stdout_write(CLEAR_SCREEN + CURSOR_HIDE)
+        """Show quiz inline, tick a single-line countdown, capture answer.
+
+        No screen clears. The box scrolls naturally into view; Claude's
+        prior output stays visible in scrollback. While we wait, we HOLD
+        Claude's new bytes so Ink's redraws don't scramble us. After we
+        finish, the held bytes are discarded and Ink repaints fresh.
+        """
+        # Print the box ONCE. No re-renders.
+        stdout_write(render_question(q, streak=state.streak).encode())
 
         deadline = time.time() + cfg.quiz_time_limit
-        last_render_time = 0.0
+        last_countdown_time = 0.0
         label: str | None = None
         skip_reason: str | None = None
 
@@ -262,23 +257,17 @@ def wrap(argv: list[str], quizzes_enabled: bool = True) -> int:
             now = time.time()
             remaining = max(0.0, deadline - now)
 
-            # Rerender if countdown moved
-            if now - last_render_time >= cfg.countdown_tick_ms / 1000.0:
-                stdout_write(CURSOR_HOME + CLEAR_BELOW)
-                rendered = render_question(
-                    q, streak=state.streak,
-                    seconds_left=remaining,
-                    total_seconds=cfg.quiz_time_limit,
-                ).encode()
-                stdout_write(rendered)
-                last_render_time = now
+            # Update the countdown line in place (\r + \x1b[2K)
+            if now - last_countdown_time >= cfg.countdown_tick_ms / 1000.0:
+                stdout_write(
+                    render_countdown_line(remaining, cfg.quiz_time_limit).encode()
+                )
+                last_countdown_time = now
 
             if remaining <= 0:
                 skip_reason = "timeout"
                 break
 
-            # Poll input and pty in parallel. Drain pty to keep buffer from
-            # overflowing.
             r, _, _ = select.select(
                 [sys.stdin, master], [], [], cfg.countdown_tick_ms / 1000.0
             )
@@ -290,18 +279,16 @@ def wrap(argv: list[str], quizzes_enabled: bool = True) -> int:
                 if data:
                     recent_raw.extend(data)
                     held_output.extend(data)
-                    # Note: we cap held_output elsewhere
+                    if len(held_output) > 80000:
+                        del held_output[:-40000]
                     stripped = _ANSI_RE.sub(b"", data)
                     content_buffer.extend(stripped)
                     if _detect_permission(bytes(recent_raw[-2000:])):
-                        # Permission prompt appeared while quiz is up --
-                        # abort the quiz and let user answer Claude.
                         skip_reason = "permission"
                         break
                     if _detect_turn_end(bytes(recent_raw[-1000:])):
                         skip_reason = "turn_end"
                         break
-
             if sys.stdin in r:
                 try:
                     data = os.read(sys.stdin.fileno(), 16)
@@ -319,9 +306,10 @@ def wrap(argv: list[str], quizzes_enabled: bool = True) -> int:
                 if ch == b"X":
                     skip_reason = "mute"
                     break
-                # ignore other keys
 
-        # Process the answer
+        # End the countdown line so the next print starts on a fresh line
+        stdout_write(b"\r\x1b[2K")
+
         if label is not None:
             correct = label == q.correct_label
             xp = state_mod.record_answer(
@@ -329,34 +317,33 @@ def wrap(argv: list[str], quizzes_enabled: bool = True) -> int:
             )
             state_mod.save(state)
 
-            stdout_write(CLEAR_SCREEN + CURSOR_HOME)
             if correct:
-                # Quick flash, then move on -- no reveal
                 flash = render_correct_flash(
                     q, streak=state.streak, combo=state.combo, xp_earned=xp,
                 ).encode()
                 stdout_write(flash)
                 time.sleep(cfg.correct_flash_ms / 1000.0)
             else:
-                # Full teaching reveal
                 reveal = render_wrong_reveal(q, chosen=label).encode()
                 stdout_write(reveal)
                 time.sleep(cfg.wrong_reveal_ms / 1000.0)
         else:
-            # Skipped, timed out, permission, or muted
             state_mod.record_skip(state, q.concept)
             state_mod.save(state)
             if skip_reason == "mute":
                 nonlocal_set_mute()
             if skip_reason != "permission":
-                # Show the reveal anyway so they learn. Except if permission
-                # prompt is urgent -- we need to get out of the way.
-                stdout_write(CLEAR_SCREEN + CURSOR_HOME)
                 reveal = render_wrong_reveal(q, chosen=None).encode()
                 stdout_write(reveal)
                 time.sleep(cfg.wrong_reveal_ms / 1000.0)
 
-        exit_quiz_mode()
+        # If a permission prompt (or turn-end) arrived during the quiz, flush
+        # the held bytes so the user can see Claude's message. Otherwise we
+        # discard; Ink will repaint fresh on its next frame.
+        if skip_reason in ("permission", "turn_end"):
+            if held_output:
+                stdout_write(bytes(held_output))
+        held_output.clear()
 
     def nonlocal_set_mute() -> None:
         nonlocal session_muted

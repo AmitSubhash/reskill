@@ -1,14 +1,14 @@
-"""Quiz + reveal rendering.
+"""Quiz box rendering.
 
-The box is a fixed-width centered card. Render functions return byte
-strings so the wrapper can write them atomically with os.write().
-
-Key rendering principles (learned the hard way):
-  1. The box renders on a FULLY CLEARED terminal. The wrapper does the
-     clear; the renderer just produces a compact self-contained block.
-  2. Every output line is padded to the box width so partial overwrites
-     can't leak through.
-  3. Cursor is hidden during rendering, restored on exit.
+Design rules (learned from v1..v5):
+  - We print the box inline. No screen clears. No cursor positioning.
+    Every render is a plain append to the terminal output stream.
+  - Lines are separated by \\n and the box scrolls naturally into
+    scrollback when Claude's output follows.
+  - The countdown lives on a SINGLE line below the box. We update it
+    in place with \\r (carriage return) so it doesn't scroll.
+  - No re-rendering of the whole box mid-quiz. The box is written
+    once as one atomic os.write().
 """
 
 from __future__ import annotations
@@ -24,11 +24,9 @@ from .palette import (
 from .question import Question
 
 
-# Box drawing
 TL, TR, BL, BR = "\u256d", "\u256e", "\u2570", "\u256f"
 HZ, VT = "\u2500", "\u2502"
-LT, RT = "\u251c", "\u2524"
-THICK_VT = "\u2503"  # ┃ left accent
+THICK_VT = "\u2503"
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -37,22 +35,21 @@ def _visible_len(text: str) -> int:
     return len(_ANSI_RE.sub("", text))
 
 
-def _term_size() -> tuple[int, int]:
+def _term_cols() -> int:
     try:
-        s = shutil.get_terminal_size()
-        return s.columns, s.lines
+        return shutil.get_terminal_size().columns
     except OSError:
-        return 80, 24
+        return 80
 
 
 def _box_width() -> int:
-    cols, _ = _term_size()
-    return min(64, max(40, cols - 6))
+    """Prefer 62 chars; fall back if terminal is narrower."""
+    return min(62, max(40, _term_cols() - 8))
 
 
 def _indent() -> str:
-    cols, _ = _term_size()
-    pad = max(2, (cols - _box_width()) // 2)
+    """Left pad so the box sits centered in the terminal."""
+    pad = max(0, (_term_cols() - _box_width()) // 2)
     return " " * pad
 
 
@@ -77,10 +74,10 @@ def _wrap(text: str, width: int) -> list[str]:
     return out
 
 
-def _row(content: str, inner_width: int, border_color: str, accent_color: str) -> str:
-    """A single content row: accent bar + space + content + padding + right border."""
-    vl = _visible_len(content)
-    pad = max(0, inner_width - vl)
+def _row(content: str, inner: int, border_color: str, accent_color: str) -> str:
+    """| content | row with a thick left accent bar."""
+    vis = _visible_len(content)
+    pad = max(0, inner - vis)
     return (
         f"{_indent()}"
         f"{paint(THICK_VT, accent_color, BOLD)} "
@@ -89,181 +86,61 @@ def _row(content: str, inner_width: int, border_color: str, accent_color: str) -
     )
 
 
-def _empty_row(inner_width: int, border_color: str, accent_color: str) -> str:
-    return _row("", inner_width, border_color, accent_color)
+def _empty(inner: int, border: str, accent: str) -> str:
+    return _row("", inner, border, accent)
 
 
-def _render_options(
-    q: Question,
-    inner_width: int,
-    answered_label: str | None = None,
-) -> list[str]:
-    """Render options, wrapped to fit. One option may span multiple lines."""
-    text_room = inner_width - 5  # room for " N) " + 1 space
+def _options(q: Question, inner: int, chosen: str | None = None) -> list[str]:
+    text_room = inner - 5
 
-    def colors(opt) -> tuple[str, str, str]:
-        if answered_label is None:
+    def colors(opt):
+        if chosen is None:
             return SAGE, INK, ""
         if opt.correct:
             return SAGE, SAGE, paint("  \u2713", SAGE, BOLD)
-        if answered_label == opt.label and not opt.correct:
+        if chosen == opt.label and not opt.correct:
             return ROSE, ROSE, paint("  \u2717", ROSE)
         return DARK_ASH, ASH, ""
 
     lines: list[str] = []
     for opt in q.options:
-        lab_color, txt_color, marker = colors(opt)
-        bold_lab = BOLD if (answered_label is None or opt.correct) else ""
-        bold_txt = BOLD if (answered_label is not None and opt.correct) else ""
+        lab_c, txt_c, marker = colors(opt)
+        lab_b = BOLD if (chosen is None or opt.correct) else ""
+        txt_b = BOLD if (chosen is not None and opt.correct) else ""
         wrapped = _wrap(opt.text, text_room)
         for i, line in enumerate(wrapped):
             if i == 0:
-                part = (
-                    paint(f" {opt.label}) ", lab_color, bold_lab)
-                    + paint(line, txt_color, bold_txt)
+                piece = (
+                    paint(f" {opt.label}) ", lab_c, lab_b)
+                    + paint(line, txt_c, txt_b)
                 )
             else:
-                part = "    " + paint(line, txt_color, bold_txt)
+                piece = "    " + paint(line, txt_c, txt_b)
             if marker and i == len(wrapped) - 1:
-                part += marker
-            lines.append(part)
+                piece += marker
+            lines.append(piece)
     return lines
 
 
-def _progress_bar(seconds_left: float, total: float, inner_width: int) -> str:
-    """A thin progress bar showing time remaining. Sage at first, gold, then rose."""
-    if seconds_left < 0:
-        seconds_left = 0
-    if total <= 0:
-        total = 1
-    frac = seconds_left / total
-    bar_w = inner_width - 6   # reserve room for label "  Ns  "
-    filled = int(round(frac * bar_w))
-    empty = bar_w - filled
-    if frac > 0.5:
-        color = SAGE
-    elif frac > 0.2:
-        color = GOLD
-    else:
-        color = ROSE
-    bar = paint("\u2588" * filled, color) + paint("\u2591" * empty, DARK_ASH, DIM)
-    label = paint(f"{seconds_left:>3.0f}s", color, DIM)
-    return f"{bar}  {label}"
-
-
-def render_question(
-    q: Question,
-    streak: int,
-    seconds_left: float | None = None,
-    total_seconds: float = 15.0,
-) -> str:
-    """Render the whole question card. If seconds_left is given, include a
-    progress bar at the bottom. The wrapper calls this repeatedly to
-    animate the countdown.
-    """
+def render_question(q: Question, streak: int) -> str:
+    """Render the full question box. One atomic write (no re-renders)."""
     width = _box_width()
     inner = width - 4
-    bar_h = HZ * (width - 2)
+    bar = HZ * (width - 2)
     border = DARK_ASH
     accent = TEAL
+    ind = _indent()
 
     out: list[str] = []
+    out.append("")  # blank line of separation above
 
-    # Top with tight title
+    # Top with centered tight title
     title = " think about this "
     t_vis = len(title)
     side_l = 2
     side_r = width - 2 - side_l - t_vis
-    top = (
-        paint(TL, border)
-        + paint(HZ * side_l, border)
-        + paint(title, accent, BOLD)
-        + paint(HZ * side_r, border)
-        + paint(TR, border)
-    )
-    out.append(_indent() + top)
-
-    # Optional streak row
-    if streak > 0:
-        out.append(_row(paint(f"day {streak} streak", GOLD, DIM), inner, border, accent))
-        out.append(_indent() + paint(LT + HZ * (width - 2) + RT, border, DIM))
-
-    out.append(_empty_row(inner, border, accent))
-
-    for line in _wrap(q.prompt, inner - 1):
-        out.append(_row(paint(line, INK, BOLD), inner, border, accent))
-
-    # Code snippet if present
-    if q.code:
-        out.append(_empty_row(inner, border, accent))
-        for code_line in q.code.split("\n"):
-            truncated = code_line[: inner - 3]
-            out.append(_row(paint("  " + truncated, TEAL), inner, border, accent))
-
-    out.append(_empty_row(inner, border, accent))
-
-    for line in _render_options(q, inner):
-        out.append(_row(line, inner, border, accent))
-
-    out.append(_empty_row(inner, border, accent))
-
-    # Countdown (if provided) ABOVE the key hints, separated by an implicit blank
-    if seconds_left is not None:
-        out.append(_row(_progress_bar(seconds_left, total_seconds, inner), inner, border, accent))
-
-    # Key hints
-    hints = (
-        paint("press ", ASH, DIM)
-        + paint("1 2 3 4", SAGE, BOLD)
-        + paint("  ", ASH, DIM)
-        + paint("\u00b7", DARK_ASH, DIM)
-        + paint("  ", ASH, DIM)
-        + paint("x", SAGE) + paint(" skip  ", ASH, DIM)
-        + paint("\u00b7", DARK_ASH, DIM)
-        + paint("  ", ASH, DIM)
-        + paint("X", SAGE) + paint(" mute", ASH, DIM)
-    )
-    out.append(_row(hints, inner, border, accent))
-
-    out.append(_indent() + paint(BL + bar_h + BR, border))
-    return "\n".join(out) + "\n"
-
-
-def render_correct_flash(q: Question, streak: int, combo: int, xp_earned: int) -> str:
-    """A minimal 1-line flash shown for correct answers so you move on fast."""
-    bits: list[str] = []
-    bits.append(paint("\u2713 exactly right", SAGE, BOLD))
-    if combo >= 2:
-        bits.append(paint(f"{combo}x combo", GOLD, BOLD))
-    bits.append(paint(f"+{xp_earned} xp", VIOLET))
-    if streak > 0:
-        bits.append(paint(f"day {streak}", GOLD, DIM))
-    joiner = paint("  \u00b7  ", DARK_ASH, DIM)
-    content = joiner.join(bits)
-    # Center it like the box
-    width = _box_width()
-    return _indent() + content + "\n"
-
-
-def render_wrong_reveal(q: Question, chosen: str | None) -> str:
-    """Full teaching reveal -- only shown when the user was wrong or skipped."""
-    width = _box_width()
-    inner = width - 4
-    bar_h = HZ * (width - 2)
-
-    if chosen is None:
-        border, accent = GOLD, GOLD
-        title = " skipped "
-    else:
-        border, accent = GOLD, GOLD
-        title = " good to know "
-
-    out: list[str] = []
-    t_vis = len(title)
-    side_l = 2
-    side_r = width - 2 - side_l - t_vis
     out.append(
-        _indent()
+        ind
         + paint(TL, border)
         + paint(HZ * side_l, border)
         + paint(title, accent, BOLD)
@@ -271,29 +148,134 @@ def render_wrong_reveal(q: Question, chosen: str | None) -> str:
         + paint(TR, border)
     )
 
-    out.append(_empty_row(inner, border, accent))
+    # Streak chip (no divider; tight layout)
+    if streak > 0:
+        streak_line = paint(f"day {streak} streak", GOLD, DIM)
+        out.append(_row(streak_line, inner, border, accent))
+        out.append(_empty(inner, border, accent))
 
+    # Question
+    for line in _wrap(q.prompt, inner - 1):
+        out.append(_row(paint(line, INK, BOLD), inner, border, accent))
+
+    # Code
     if q.code:
+        out.append(_empty(inner, border, accent))
         for code_line in q.code.split("\n"):
-            truncated = code_line[: inner - 3]
-            out.append(_row(paint("  " + truncated, TEAL, DIM), inner, border, accent))
-        out.append(_empty_row(inner, border, accent))
+            out.append(_row(paint("  " + code_line[: inner - 3], TEAL), inner, border, accent))
 
-    for line in _render_options(q, inner, answered_label=chosen or ""):
+    out.append(_empty(inner, border, accent))
+
+    # Options
+    for line in _options(q, inner):
         out.append(_row(line, inner, border, accent))
 
-    out.append(_empty_row(inner, border, accent))
+    out.append(_empty(inner, border, accent))
+
+    # Key hints inside the box
+    hints = (
+        paint("press ", ASH, DIM)
+        + paint("1 2 3 4", SAGE, BOLD)
+        + paint("  \u00b7  ", DARK_ASH, DIM)
+        + paint("x", SAGE)
+        + paint(" skip  ", ASH, DIM)
+        + paint("\u00b7  ", DARK_ASH, DIM)
+        + paint("X", SAGE)
+        + paint(" mute", ASH, DIM)
+    )
+    out.append(_row(hints, inner, border, accent))
+
+    # Bottom
+    out.append(ind + paint(BL + bar + BR, border))
+    out.append("")  # blank line below
+
+    return "\n".join(out) + "\n"
+
+
+def render_countdown_line(seconds_left: float, total: float) -> str:
+    """A single line to be written with leading \\r to update the countdown
+    without scrolling. Returns bytes-safe text with no trailing newline.
+    """
+    if seconds_left < 0:
+        seconds_left = 0
+    if total <= 0:
+        total = 1
+    width = _box_width()
+    inner = width - 4
+    bar_w = inner - 10  # room for " XXs left"
+
+    frac = seconds_left / total
+    filled = int(round(frac * bar_w))
+    empty = bar_w - filled
+    if frac > 0.5:
+        color = SAGE
+    elif frac > 0.25:
+        color = GOLD
+    else:
+        color = ROSE
+
+    bar = paint("\u2588" * filled, color) + paint("\u2591" * empty, DARK_ASH, DIM)
+    label = paint(f"{seconds_left:>3.0f}s", color, DIM)
+    # Clear to end of line with \x1b[K so old content doesn't linger
+    return f"\r\x1b[2K{_indent()}  {bar}  {label}"
+
+
+def render_correct_flash(
+    q: Question, streak: int, combo: int, xp_earned: int
+) -> str:
+    """One-line positive acknowledgement. Compact, moves on fast."""
+    bits = [paint("\u2713 exactly right", SAGE, BOLD)]
+    if combo >= 2:
+        bits.append(paint(f"{combo}x combo", GOLD, BOLD))
+    bits.append(paint(f"+{xp_earned} xp", VIOLET))
+    if streak > 0:
+        bits.append(paint(f"day {streak}", GOLD, DIM))
+    joiner = paint("  \u00b7  ", DARK_ASH, DIM)
+    return "\n" + _indent() + joiner.join(bits) + "\n\n"
+
+
+def render_wrong_reveal(q: Question, chosen: str | None) -> str:
+    """Teaching reveal -- shown on wrong/skipped only. Inline, atomic."""
+    width = _box_width()
+    inner = width - 4
+    bar = HZ * (width - 2)
+    ind = _indent()
+
+    border = GOLD
+    accent = GOLD
+    title = " good to know " if chosen is not None else " skipped "
+
+    out: list[str] = []
+    out.append("")
+
+    t_vis = len(title)
+    side_l = 2
+    side_r = width - 2 - side_l - t_vis
+    out.append(
+        ind
+        + paint(TL, border)
+        + paint(HZ * side_l, border)
+        + paint(title, accent, BOLD)
+        + paint(HZ * side_r, border)
+        + paint(TR, border)
+    )
+
+    if q.code:
+        out.append(_empty(inner, border, accent))
+        for code_line in q.code.split("\n"):
+            out.append(_row(paint("  " + code_line[: inner - 3], TEAL, DIM), inner, border, accent))
+
+    out.append(_empty(inner, border, accent))
+
+    for line in _options(q, inner, chosen=chosen or ""):
+        out.append(_row(line, inner, border, accent))
+
+    out.append(_empty(inner, border, accent))
 
     for line in _wrap(q.explanation, inner - 1):
         out.append(_row(paint(line, STONE), inner, border, accent))
 
-    out.append(_empty_row(inner, border, accent))
+    out.append(ind + paint(BL + bar + BR, border))
+    out.append("")
 
-    if chosen is None:
-        footer = paint("we'll surface this again later", ASH, DIM)
-    else:
-        footer = paint("we'll surface this again soon", ASH, DIM)
-    out.append(_row(footer, inner, border, accent))
-
-    out.append(_indent() + paint(BL + bar_h + BR, border))
     return "\n".join(out) + "\n"
