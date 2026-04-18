@@ -36,7 +36,7 @@ import tty
 from pathlib import Path
 
 from . import state as state_mod
-from .activity import have_reskill_hooks, is_claude_active
+from .activity import have_reskill_hooks, is_claude_active, recent_transcript_text
 from .git_diffs import fetch_commits, project_root
 from .inline_box import (
     render_correct_flash,
@@ -169,23 +169,30 @@ def _render_idle_card() -> None:
 
 
 def _pick_question(seen_ids: set[str]) -> Question | None:
-    """Source a question from: project cache > commit diffs > template bank."""
+    """Source a question that matches what Claude is WORKING ON NOW.
+
+    Priority (highest to lowest):
+      1. Concepts detected in the live Claude transcript (this turn's
+         assistant text + tool inputs). This is the "you asked about X,
+         here's a quiz about X" path.
+      2. Concepts detected in recent git commits in this project.
+      3. Cumulative per-project concept tally from past sessions.
+      4. Any fresh question at all.
+    """
     project = project_root()
-    weights: dict[str, int] = {}
-    if project:
-        cache_dir = CACHE_ROOT / _project_hash(project)
-        if cache_dir.exists():
-            weights = dict(_load_cache(cache_dir).get("concepts", {}))
 
-    # Sorted by recent activity: try the most-touched concepts first.
-    ordered = sorted(weights.keys(), key=lambda c: -weights[c])
-    for concept in ordered:
-        bank = TEMPLATE_BANK.get(concept, [])
-        fresh = [q for q in bank if q.id not in seen_ids]
-        if fresh:
-            return random.choice(fresh)
+    # 1. Live context from the current Claude transcript.
+    live_text = recent_transcript_text(cwd=os.getcwd() or project)
+    if live_text:
+        live_concepts = detect_concepts(live_text)
+        random.shuffle(live_concepts)
+        for concept in live_concepts:
+            bank = TEMPLATE_BANK.get(concept, [])
+            fresh = [q for q in bank if q.id not in seen_ids]
+            if fresh:
+                return random.choice(fresh)
 
-    # Fall back: recent commit diffs.
+    # 2. Recent commit diffs.
     if project:
         commits = fetch_commits("7d", cwd=project, limit=15)
         for commit in commits:
@@ -196,7 +203,19 @@ def _pick_question(seen_ids: set[str]) -> Question | None:
                 if fresh:
                     return random.choice(fresh)
 
-    # Final fallback: anything fresh.
+    # 3. Cumulative tally (only if the live signal was empty).
+    weights: dict[str, int] = {}
+    if project:
+        cache_dir = CACHE_ROOT / _project_hash(project)
+        if cache_dir.exists():
+            weights = dict(_load_cache(cache_dir).get("concepts", {}))
+    for concept in sorted(weights.keys(), key=lambda c: -weights[c]):
+        bank = TEMPLATE_BANK.get(concept, [])
+        fresh = [q for q in bank if q.id not in seen_ids]
+        if fresh:
+            return random.choice(fresh)
+
+    # 4. Anything fresh.
     return generate_question("", seen_ids=seen_ids)
 
 
@@ -204,6 +223,16 @@ def _render_question_view(question: Question, state: state_mod.State) -> None:
     _clear_screen()
     sys.stdout.write("\n")
     sys.stdout.write(render_question(question, streak=state.streak, compact=True))
+    # The user's keystrokes go to whichever tmux pane has focus -- by default
+    # that's Claude's pane. Show a clear hint that answering requires a pane
+    # switch, otherwise the user types "1" and it gets sent to Claude.
+    hint1 = paint(
+        "  click here ", ASH, DIM,
+    ) + paint("or ", ASH, DIM) + paint(
+        "ctrl-b \u2192", TEAL, BOLD,
+    ) + paint("  to focus this pane", ASH, DIM)
+    hint2 = paint("  then press 1 / 2 / 3 / 4", ASH, DIM)
+    sys.stdout.write("\n" + hint1 + "\n" + hint2 + "\n")
     sys.stdout.flush()
 
 

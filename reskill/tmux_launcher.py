@@ -91,6 +91,12 @@ def launch(claude_args: list[str]) -> int:
     try:
         if _inside_tmux():
             # Already in tmux: split current window for the quiz pane.
+            # Turn on mouse mode globally so the user can click to focus
+            # the quiz pane (safe -- this is idempotent).
+            subprocess.run(
+                ["tmux", "set-option", "-g", "mouse", "on"],
+                check=False,
+            )
             subprocess.run(
                 [
                     "tmux", "split-window", "-h", "-l", str(panel_cols), "-d",
@@ -111,6 +117,13 @@ def launch(claude_args: list[str]) -> int:
              f"bash -c {_shell_quote(claude_cmd)}"],
             check=True,
         )
+        # Enable mouse mode for THIS session only so the user can click
+        # the quiz pane to focus it. The prefix+arrow way still works;
+        # the click is just friendlier.
+        subprocess.run(
+            ["tmux", "set-option", "-t", session, "mouse", "on"],
+            check=True,
+        )
         subprocess.run(
             [
                 "tmux", "split-window", "-h", "-l", str(panel_cols),
@@ -118,8 +131,6 @@ def launch(claude_args: list[str]) -> int:
             ],
             check=True,
         )
-        # Pane 1 (quiz) should not prevent the session from closing when
-        # claude exits. The kill-session in claude_cmd handles it.
         subprocess.run(
             ["tmux", "select-pane", "-t", f"{session}:0.0"],
             check=True,
