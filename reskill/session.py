@@ -25,7 +25,7 @@ from .inline_box import (
     render_wrong_reveal,
 )
 from .log_session import CACHE_ROOT, _load_cache, _project_hash
-from .palette import ASH, BOLD, DARK_ASH, DIM, GOLD, SAGE, STONE, TEAL, paint
+from .palette import ASH, BOLD, DARK_ASH, DIM, GOLD, ROSE, SAGE, STONE, TEAL, paint
 from .question import Question, detect_concepts, TEMPLATE_BANK
 
 
@@ -212,6 +212,9 @@ def run_session(
     if sys.stdin.isatty():
         saved_tty = _set_cbreak()
 
+    # Per-question outcomes for the end-of-session summary.
+    outcomes: list[dict] = []
+
     try:
         for idx, (question, commit) in enumerate(deck, start=1):
             progress = paint(f"  {idx}/{len(deck)}", ASH, DIM)
@@ -220,7 +223,8 @@ def run_session(
             sys.stdout.write(render_question(question, streak=state.streak))
             sys.stdout.flush()
 
-            deadline = time.time() + 45.0
+            shown_at = time.time()
+            deadline = shown_at + 45.0
             label: str | None = None
             skipped = False
             while time.time() < deadline:
@@ -235,7 +239,10 @@ def run_session(
                     skipped = True
                     break
                 if ch == b"q":
+                    _render_summary(outcomes, commits_count=len(commits))
                     return 0
+
+            answer_time = time.time() - shown_at
 
             if label is not None:
                 correct = label == question.correct_label
@@ -243,6 +250,13 @@ def run_session(
                     state, question.id, question.concept, correct,
                 )
                 state_mod.save(state)
+                outcomes.append({
+                    "question": question,
+                    "commit": commit,
+                    "outcome": "correct" if correct else "wrong",
+                    "chosen": label,
+                    "answer_time": answer_time,
+                })
                 if correct:
                     flash = render_correct_flash(
                         question,
@@ -255,10 +269,29 @@ def run_session(
                     time.sleep(0.9)
                 else:
                     sys.stdout.write(render_wrong_reveal(question, chosen=label))
+                    if answer_time < 5.0:
+                        # High-confidence miss (Butterfield & Metcalfe 2001
+                        # hypercorrection effect): make the reveal stand out
+                        # so the user tags it mentally.
+                        sys.stdout.write(
+                            "  " + paint("\u25c9 sticky one", GOLD, BOLD)
+                            + paint(
+                                " - high-confidence miss, stays with you",
+                                ASH, DIM,
+                            )
+                            + "\n"
+                        )
                     _wait_for_continue()
             else:
                 state_mod.record_skip(state, question.concept)
                 state_mod.save(state)
+                outcomes.append({
+                    "question": question,
+                    "commit": commit,
+                    "outcome": "timeout" if not skipped else "skipped",
+                    "chosen": None,
+                    "answer_time": answer_time,
+                })
                 if not skipped:
                     sys.stdout.write(
                         paint("  (time's up)", ASH, DIM) + "\n\n"
@@ -266,16 +299,109 @@ def run_session(
                 sys.stdout.write(render_wrong_reveal(question, chosen=None))
                 _wait_for_continue()
 
-        state = state_mod.load()
-        print()
-        print(
-            paint("  session complete", SAGE, BOLD),
-            paint(f"· {state.correct_today}/{state.answered_today} today", ASH),
-            paint(f"· day {state.streak} streak", GOLD, DIM),
-        )
-        print()
+        _render_summary(outcomes, commits_count=len(commits))
         return 0
 
     finally:
         if saved_tty is not None:
             _restore(saved_tty)
+
+
+def _render_summary(outcomes: list[dict], commits_count: int) -> None:
+    """Rich end-of-session summary. Shows:
+
+      - Score + time + sticky-wrong count
+      - Concepts touched (with ✓/✗ markers)
+      - Missed questions with the right answer quoted
+      - Suggested next move (review queue, more session, rest)
+
+    Research note: Butler & Roediger 2008 delayed-feedback preference
+    is already satisfied by showing the correct answer during the
+    quiz; this summary is about *recall cueing* and closure, not
+    additional teaching content.
+    """
+    from collections import OrderedDict
+
+    state = state_mod.load()
+    print()
+    print(paint("  session complete", SAGE, BOLD))
+    if not outcomes:
+        print(paint(f"  no questions answered from {commits_count} commits", ASH, DIM))
+        print()
+        return
+
+    correct = sum(1 for o in outcomes if o["outcome"] == "correct")
+    wrong = sum(1 for o in outcomes if o["outcome"] == "wrong")
+    skipped = sum(1 for o in outcomes if o["outcome"] == "skipped")
+    timeouts = sum(1 for o in outcomes if o["outcome"] == "timeout")
+    sticky = sum(
+        1 for o in outcomes
+        if o["outcome"] == "wrong" and o.get("answer_time", 999) < 5.0
+    )
+    total_time = sum(o.get("answer_time", 0.0) for o in outcomes)
+    accuracy = correct / len(outcomes) * 100
+
+    print(
+        paint(f"  {correct} correct", SAGE, BOLD)
+        + paint(f"   {wrong} wrong", ROSE if wrong else ASH, BOLD if wrong else DIM)
+        + (paint(f"   {skipped} skipped", ASH, DIM) if skipped else "")
+        + (paint(f"   {timeouts} timeouts", ASH, DIM) if timeouts else "")
+        + paint(f"   {accuracy:.0f}% accuracy", ASH, DIM)
+    )
+    mins = total_time / 60
+    print(
+        paint(f"  took {mins:.1f} min", ASH, DIM)
+        + (paint(f"   {sticky} sticky \u25c9", GOLD, DIM) if sticky else "")
+    )
+
+    # Concepts touched with pass/fail markers.
+    concepts_hit: OrderedDict[str, dict] = OrderedDict()
+    for o in outcomes:
+        concept = o["question"].concept
+        concepts_hit.setdefault(concept, {"ok": 0, "miss": 0})
+        if o["outcome"] == "correct":
+            concepts_hit[concept]["ok"] += 1
+        else:
+            concepts_hit[concept]["miss"] += 1
+    if concepts_hit:
+        print()
+        print(paint("  concepts this session", ASH))
+        for concept, data in concepts_hit.items():
+            marks = paint("\u2713" * data["ok"], SAGE)
+            marks += paint("\u2717" * data["miss"], ROSE) if data["miss"] else ""
+            print(f"    {paint(concept.ljust(28), STONE)} {marks}")
+
+    # Missed questions with the correct answer pointed out.
+    misses = [o for o in outcomes if o["outcome"] in ("wrong", "timeout", "skipped")]
+    if misses:
+        print()
+        print(paint(f"  revisit later ({len(misses)})", ROSE if any(m['outcome']=='wrong' for m in misses) else GOLD))
+        for m in misses[:5]:
+            q = m["question"]
+            correct_opt = next((o for o in q.options if o.correct), None)
+            prompt_short = q.prompt[:60] + ("..." if len(q.prompt) > 60 else "")
+            print(f"    {paint('·', ASH, DIM)} {paint(prompt_short, STONE)}")
+            if correct_opt:
+                ans_short = correct_opt.text[:55] + (
+                    "..." if len(correct_opt.text) > 55 else ""
+                )
+                print(
+                    "      "
+                    + paint("\u2192 ", SAGE)
+                    + paint(ans_short, ASH, DIM)
+                )
+        if len(misses) > 5:
+            print(paint(f"    ...and {len(misses) - 5} more", ASH, DIM))
+
+    # Next-step hint.
+    print()
+    if wrong >= 3:
+        hint = "take five, then `reskill session --since 3d` to rebuild streaks"
+    elif correct >= 4 and wrong == 0:
+        hint = "crushed it. try `reskill session --max 10` next"
+    elif skipped + timeouts >= 2:
+        hint = "skipped a lot? the `reskill claude` pane shows context-matched ones"
+    else:
+        hint = f"day {state.streak} streak · {state.correct_today}/{state.daily_goal} today"
+    print(paint(f"  {hint}", ASH, DIM))
+    print()
