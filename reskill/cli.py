@@ -4,6 +4,10 @@ Usage:
   reskill claude [args...]     wrap `claude` with inline quizzes (the real deal)
   reskill run <cmd> [args...]  wrap any command with inline quizzes
   reskill session [--since 7d] quiz deck built from your recent commits
+  reskill install              install Claude Code Stop hook for auto-ingest
+  reskill uninstall            remove the Stop hook
+  reskill hook-status          is the Stop hook installed?
+  reskill log-session <path>   ingest a transcript (called by the Stop hook)
   reskill demo                 interactive demo (no Claude Code required)
   reskill stats                show streak, XP, concept mastery
   reskill pause                turn quizzes OFF globally
@@ -172,9 +176,34 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_question()
     if cmd == "session":
         return cmd_session(rest)
+    if cmd == "install":
+        from . import hookinstall
+        return hookinstall.install()
+    if cmd == "uninstall":
+        from . import hookinstall
+        return hookinstall.uninstall()
+    if cmd == "hook-status":
+        from . import hookinstall
+        return hookinstall.status()
+    if cmd == "log-session":
+        from . import log_session
+        return log_session.log_session(
+            transcript_path=(rest[0] if rest else _read_hook_stdin()),
+            cwd=os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd(),
+        )
 
     print(f"reskill: unknown command '{cmd}'", file=sys.stderr)
     return cmd_help()
+
+
+def _read_hook_stdin() -> str:
+    """Claude Code hooks pass JSON via stdin with transcript_path. Parse it."""
+    import json
+    try:
+        data = json.loads(sys.stdin.read() or "{}")
+        return str(data.get("transcript_path") or "")
+    except (json.JSONDecodeError, OSError):
+        return ""
 
 
 def cmd_session(argv: list[str]) -> int:

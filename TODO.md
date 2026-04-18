@@ -51,17 +51,22 @@ The "quiz me on this week's commits" killer feature from research.
 
 ## Phase C2: Stop hook integration
 
-- [ ] `reskill install` command:
-  - [ ] Writes Stop hook to `~/.claude/settings.json`
-  - [ ] Hook calls `reskill log-session <transcript_path>`
-  - [ ] Idempotent (don't duplicate if already installed)
-  - [ ] `reskill uninstall` removes the hook
-- [ ] `reskill log-session` command:
-  - [ ] Reads Claude Code session transcript JSONL
-  - [ ] Extracts concepts/patterns/tools used
-  - [ ] Enqueues question candidates for the project
-  - [ ] Writes a non-blocking single-line notice to user
-- [ ] Verify session transcript format / path resolution
+- [x] `reskill install` command:
+  - [x] Writes Stop hook to `~/.claude/settings.json`
+  - [x] Hook calls `reskill log-session` (transcript via stdin JSON)
+  - [x] Idempotent (detects marker string, skips re-install)
+  - [x] `reskill uninstall` removes the hook
+  - [x] `reskill hook-status` reports install state
+- [x] `reskill log-session` command:
+  - [x] Reads Claude Code session transcript JSONL
+  - [x] Extracts concepts/patterns/tools used via detect_concepts
+  - [x] Enqueues concept tally into ~/.reskill/project_cache/<hash>/
+  - [x] Writes a non-blocking single-line notice to stderr
+- [ ] Verify against a real Claude Code session transcript format
+      (tested against synthetic JSONL; real path probably works but
+      untested end-to-end)
+- [ ] Use cached concept tallies to PRIORITIZE question selection in
+      `reskill session` (currently session only uses git commits)
 
 ## Phase C3: Shell prompt widget + streak UI
 
