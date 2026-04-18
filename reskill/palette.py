@@ -25,9 +25,11 @@ DIM = "\033[2m"
 def _theme() -> str:
     if os.environ.get("NO_COLOR"):
         return "mono"
-    # Default: mono. Works on any terminal / any background. Users who
-    # want the Everforest palette can opt in with RESKILL_THEME=everforest.
-    return os.environ.get("RESKILL_THEME", "mono").lower()
+    # Default: Everforest. Mono collapses everything to BOLD/DIM and
+    # feels washed out on common dark terminals; we only want it for
+    # light backgrounds or accessibility opt-ins. Explicit switch:
+    # RESKILL_THEME=mono.
+    return os.environ.get("RESKILL_THEME", "everforest").lower()
 
 
 def rgb(r: int, g: int, b: int) -> str:
@@ -56,14 +58,14 @@ if _theme() == "mono":
     GOLD     = BOLD
     BLUE     = BOLD
 else:
-    # Everforest-tuned true-color. Compared to the previous palette,
-    # ASH and STONE are pulled brighter so they're readable on both
-    # light terminals and dark ones. Don't drop below 160 on any
-    # channel for "body dim" roles.
+    # Everforest-tuned true-color. ASH and STONE are pulled brighter
+    # still than v2 -- the user couldn't see the ~a8 gray on common
+    # backgrounds. New floor is #c8 (200) for "dim body" roles so
+    # readability wins across terminal themes.
     INK      = rgb(211, 198, 170)   # #d3c6aa  primary text
-    STONE    = rgb(186, 196, 189)   # #bac4bd  muted text (was too dark)
-    ASH      = rgb(168, 181, 174)   # #a8b5ae  dim text (was too dark)
-    DARK_ASH = rgb(130, 144, 137)   # #829089  borders only
+    STONE    = rgb(208, 215, 208)   # #d0d7d0  muted text (bright)
+    ASH      = rgb(196, 204, 198)   # #c4ccc6  dim text (bright)
+    DARK_ASH = rgb(156, 170, 164)   # #9caaa4  borders only
     SAGE     = rgb(167, 192, 128)   # #a7c080  accent / success
     TEAL     = rgb(127, 187, 179)   # #7fbbb3  links / headers
     ROSE     = rgb(230, 126, 128)   # #e67e80  errors

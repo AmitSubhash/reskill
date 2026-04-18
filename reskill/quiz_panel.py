@@ -230,7 +230,7 @@ def _render_footer(items: list[tuple[str, str]]) -> str:
 # ───────── Cards ─────────
 
 
-def _render_idle_card(session: SessionCounters, paced: pacing.PacingState) -> None:
+def _render_idle_card(session: SessionCounters, _paced: pacing.PacingState) -> None:
     """Shown when Claude is not currently thinking."""
     _set_pane_border("idle")
     _clear_screen()
@@ -243,29 +243,23 @@ def _render_idle_card(session: SessionCounters, paced: pacing.PacingState) -> No
         live_text or "", state, set(state.seen_questions)
     )
 
-    next_in = int(pacing.seconds_until_next_allowed(paced))
-    wait_line = (
-        paint(f"next allowed in {next_in}s", ASH, DIM)
-        if next_in > 0
-        else paint("ready when claude thinks", ASH, DIM)
-    )
-
     lines = [
         "",
         "  " + paint("reSkill", TEAL, BOLD) + "   " + session.badge(),
-        "  " + paint("standby", ASH, DIM),
+        "  " + paint("waiting for claude to think", ASH, DIM),
         "",
         "  "
         + paint(f"day {state.streak}", GOLD, BOLD)
         + paint(" streak", ASH, DIM)
         + "   "
-        + paint(f"{state.correct_today}/{state.daily_goal} today", SAGE if state.correct_today >= state.daily_goal else ASH),
+        + paint(
+            f"{state.correct_today}/{state.daily_goal} today",
+            SAGE if state.correct_today >= state.daily_goal else ASH,
+        ),
         "  " + paint(f"{due_n} due \u00b7 {new_n} new", ASH, DIM),
-        "",
-        "  " + wait_line,
-        "  " + paint(f"signal: {source}", DARK_ASH, DIM),
     ]
     if source != "hooks":
+        lines.append("")
         lines.append(
             "  " + paint("tip: `reskill install` for tighter timing", DARK_ASH, DIM)
         )
