@@ -1,17 +1,26 @@
 """reskill -- learn during AI thinking time.
 
 Usage:
-  reskill claude [args...]    wrap `claude` with inline quizzes (the real deal)
-  reskill run <cmd> [args...] wrap any command with inline quizzes
-  reskill demo                interactive demo (no Claude Code required)
-  reskill stats               show streak, XP, concept mastery
-  reskill question            render a sample quiz box (UI sanity check)
+  reskill claude [args...]     wrap `claude` with inline quizzes (the real deal)
+  reskill run <cmd> [args...]  wrap any command with inline quizzes
+  reskill demo                 interactive demo (no Claude Code required)
+  reskill stats                show streak, XP, concept mastery
+  reskill pause                turn quizzes OFF globally
+  reskill resume               turn quizzes back ON
+  reskill question             render a sample quiz box (UI sanity check)
+
+Flags:
+  --no-quiz                    disable quizzes for this invocation only
+                               e.g. `reskill claude --no-quiz /plan "..."
 
 During a wrapped session:
   1-4   answer the quiz
-  esc   skip this quiz
-  Quizzes pause automatically during Claude permission prompts (y/n),
-  so your keys always go to the right place.
+  x     skip this quiz (tracked; you'll see related concepts again)
+  X     mute quizzes for the rest of THIS session
+  esc   alias for x
+
+Quizzes also pause automatically during Claude permission prompts
+(y/n or numbered options), so your keys always reach the right place.
 """
 
 from __future__ import annotations
@@ -24,7 +33,38 @@ from .palette import BOLD, DIM, INK, STONE, ASH, DARK_ASH, SAGE, TEAL, GOLD, VIO
 
 def cmd_run(argv: list[str]) -> int:
     from . import wrap
-    return wrap.wrap(argv)
+    quizzes_enabled = True
+    # Allow `--no-quiz` as the FIRST arg before the wrapped command
+    # (so `reskill run --no-quiz claude` works, but also
+    # `reskill claude --no-quiz` because we intercept it in main()).
+    if argv and argv[0] == "--no-quiz":
+        quizzes_enabled = False
+        argv = argv[1:]
+    return wrap.wrap(argv, quizzes_enabled=quizzes_enabled)
+
+
+def cmd_pause() -> int:
+    from . import state as state_mod
+    s = state_mod.load()
+    s.enabled = False
+    state_mod.save(s)
+    print(
+        paint("  reskill paused", ASH, BOLD),
+        paint("-- run `reskill resume` when you want questions back", ASH, DIM),
+    )
+    return 0
+
+
+def cmd_resume() -> int:
+    from . import state as state_mod
+    s = state_mod.load()
+    s.enabled = True
+    state_mod.save(s)
+    print(
+        paint("  reskill resumed", SAGE, BOLD),
+        paint("-- quizzes will appear during thinking time", ASH, DIM),
+    )
+    return 0
 
 
 def cmd_demo() -> int:
@@ -108,12 +148,25 @@ def main(argv: list[str] | None = None) -> int:
     if cmd == "run":
         return cmd_run(rest)
     if cmd == "claude":
-        # shortcut: reskill claude ...  -> reskill run claude ...
-        return cmd_run(["claude"] + rest)
+        # Shortcut: reskill claude [flags]... [args]
+        # Support --no-quiz anywhere, not just at the front.
+        no_quiz = False
+        filtered_rest: list[str] = []
+        for a in rest:
+            if a == "--no-quiz":
+                no_quiz = True
+            else:
+                filtered_rest.append(a)
+        inner = ["--no-quiz", "claude"] + filtered_rest if no_quiz else ["claude"] + filtered_rest
+        return cmd_run(inner)
     if cmd == "demo":
         return cmd_demo()
     if cmd == "stats":
         return cmd_stats()
+    if cmd == "pause":
+        return cmd_pause()
+    if cmd == "resume":
+        return cmd_resume()
     if cmd == "question":
         return cmd_question()
 

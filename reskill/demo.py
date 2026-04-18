@@ -142,7 +142,7 @@ def _read_answer(
                     state, q.id, q.concept, correct
                 )
                 return label, xp
-            if ch == b"\x1b":
+            if ch in (b"\x1b", b"x", b"X"):
                 state_mod.record_skip(state, q.concept)
                 return None, 0
             # other keys: ignore, keep waiting

@@ -124,7 +124,7 @@ def _build_context_window(buffer: bytearray, limit: int = 2000) -> str:
     return recent.decode("utf-8", errors="ignore")
 
 
-def wrap(argv: list[str]) -> int:
+def wrap(argv: list[str], quizzes_enabled: bool = True) -> int:
     if not argv:
         print("reskill: no command given", file=sys.stderr)
         return 2
@@ -149,6 +149,12 @@ def wrap(argv: list[str]) -> int:
 
     cfg = Config()
     state = state_mod.load()
+
+    # Combined enablement:
+    #  - quizzes_enabled: CLI flag (--no-quiz) for this invocation
+    #  - state.enabled:    persistent global toggle (`reskill pause`/`resume`)
+    #  - session_muted:    keyboard shortcut `X` during session mutes for rest of run
+    session_muted = (not quizzes_enabled) or (not state.enabled)
 
     content_buffer = bytearray()   # stripped text for question gen
     recent_raw = bytearray()       # raw recent output for permission detection
@@ -224,9 +230,10 @@ def wrap(argv: list[str]) -> int:
                     del content_buffer[:-10000]
 
                 # Quiz trigger: in a thinking window, not in permission,
-                # not mid-quiz, not in reveal cooldown
+                # not mid-quiz, not in reveal cooldown, reskill is enabled
                 if (
-                    prompt_submitted_at > 0
+                    not session_muted
+                    and prompt_submitted_at > 0
                     and (now - prompt_submitted_at) * 1000 > cfg.submit_to_quiz_ms
                     and now > suppress_quizzes_until
                     and not awaiting_answer
@@ -272,7 +279,7 @@ def wrap(argv: list[str]) -> int:
                         reveal_until = time.time() + cfg.reveal_duration_ms / 1000.0
                         flush_pending_output()
                         consumed = True
-                    elif ch == b"\x1b":
+                    elif ch in (b"\x1b", b"x"):
                         state_mod.record_skip(state, pending_q.concept)
                         state_mod.save(state)
                         rendered = render_answer_reveal(pending_q, None, 0)
@@ -280,6 +287,24 @@ def wrap(argv: list[str]) -> int:
                         pending_q = None
                         awaiting_answer = False
                         reveal_until = time.time() + cfg.reveal_duration_ms / 1000.0
+                        flush_pending_output()
+                        consumed = True
+                    elif ch == b"X":
+                        # Capital X: skip this one AND mute for rest of session
+                        state_mod.record_skip(state, pending_q.concept)
+                        state_mod.save(state)
+                        session_muted = True
+                        rendered = render_answer_reveal(pending_q, None, 0)
+                        os.write(sys.stdout.fileno(), rendered.encode())
+                        # Small muted-for-session notice
+                        from .palette import paint, ASH, DIM
+                        notice = paint(
+                            "  reskill muted for this session -- run `reskill resume` to turn it back on\n",
+                            ASH, DIM,
+                        )
+                        os.write(sys.stdout.fileno(), notice.encode())
+                        pending_q = None
+                        awaiting_answer = False
                         flush_pending_output()
                         consumed = True
 

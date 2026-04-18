@@ -26,6 +26,7 @@ class State:
     freezes: int = 2
     seen_questions: list[str] = field(default_factory=list)
     concepts: dict[str, dict] = field(default_factory=dict)
+    enabled: bool = True   # global on/off; toggled via `reskill pause`/`resume`
     # concepts[concept_key] = {"ef": 2.5, "interval": 1, "reps": 0, "last": 0.0, "correct": 0, "total": 0}
 
     @property

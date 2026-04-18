@@ -195,13 +195,19 @@ def render_question(q: Question, streak: int = 0) -> str:
     # Spacer
     out.append(_row("", inner, border_color, left_accent=accent))
 
-    # Footer
+    # Footer: answer options + escape hatches
     footer = (
         paint("press ", ASH, DIM)
         + paint("1 2 3 4", SAGE, BOLD)
         + paint(" to answer  ", ASH, DIM)
         + paint("\u00b7", DARK_ASH, DIM)
-        + paint("  esc to skip", ASH, DIM)
+        + paint("  ", ASH, DIM)
+        + paint("x", SAGE)
+        + paint(" skip  ", ASH, DIM)
+        + paint("\u00b7", DARK_ASH, DIM)
+        + paint("  ", ASH, DIM)
+        + paint("X", SAGE)
+        + paint(" mute session", ASH, DIM)
     )
     out.append(_row(footer, inner, border_color, left_accent=accent))
 
