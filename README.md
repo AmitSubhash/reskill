@@ -1,9 +1,8 @@
 # reSkill
 
-Turn AI thinking time into developer growth. A quiz box appears inline
-while Claude Code is thinking. You answer with 1-4 (or skip with esc).
-Claude's response is held until you answer. When Claude finishes, it
-shows you the response. You learned something. You keep coding.
+Turn AI thinking time into developer growth. Inline quizzes that pop
+while Claude Code is thinking, a commit-driven deck for deliberate
+practice, and a streak you care about.
 
 ## Install
 
@@ -12,50 +11,95 @@ cd ~/Projects/reskill
 pip install -e .
 ```
 
-## Use
+## The two ways to use it
+
+### 1. Live quizzes while Claude thinks (`reskill claude`)
+
+Wrap Claude Code. A small panel pins to the bottom of your terminal
+when Claude is mid-thought; your answers (1-4, `x` skip, `X` mute)
+never leak through to Claude. Built on a DECSTBM scroll-region so
+Claude's UI keeps streaming above the panel with no alt-screen
+switch.
 
 ```bash
-# Try the demo first (no API needed)
-reskill demo
-
-# Check your stats
-reskill stats
-
-# The real thing: wrap Claude Code
 reskill claude                       # shortcut for `reskill run claude`
 reskill run claude --continue        # or any args
 reskill run claude /plan "fix bug"   # any claude subcommand
 ```
 
-## What you'll see
+### 2. Quiz me on what I shipped this week (`reskill session`)
 
-1. You type a prompt in Claude and hit Enter.
-2. Claude starts thinking. A small spinner appears.
-3. ~0.3 seconds in, a quiz box pops inline -- full width.
-4. You press 1/2/3/4 or esc. The answer reveal appears with the correct
-   option and a short teaching explanation.
-5. If Claude is still thinking, another question may appear.
-6. When Claude finishes thinking, any queued output is released.
-7. Claude's response streams as usual. You can keep coding.
+Reads the last N days of `git log` in the current repo, matches each
+commit's diff against the concept patterns, and walks you through a
+small deck that's stocked with *your* recent work.
 
-Your XP, streak, and per-concept mastery persist in `~/.reskill/`.
+```bash
+reskill session                  # last 7 days, 5 questions
+reskill session --since 14d
+reskill session --since 24h --max 3
+```
 
-## Safety: permission prompts
+Each quiz shows a small "from <commit sha> <subject>" chip so you
+recognize which commit the question came from.
 
-When Claude asks you to approve an action ("1. Yes / 2. Yes, always /
-3. No"), reSkill detects it and suppresses quizzes. Your 1/2/3 answer
-always goes to Claude, not to reSkill.
+## Learning loop (optional but recommended)
 
-## Keyboard
+Install a Claude Code Stop hook that ingests your session transcripts
+as they end. The hook extracts concepts your session actually touched
+and tallies them per-project; `reskill session` then weights your
+deck toward those concepts.
 
-| Key   | Action                  |
-|-------|-------------------------|
-| `1`-`4` | Answer current quiz   |
-| `esc` | Skip the current quiz   |
+```bash
+reskill install        # adds a Stop hook to ~/.claude/settings.json
+reskill uninstall      # removes it
+reskill hook-status    # check install state
+```
 
-All other keys pass through to Claude unchanged.
+The installer backs up your existing `settings.json` to
+`settings.json.reskill-bak`.
+
+## Streak + status
+
+```bash
+reskill status            # terse one-liner: "🔥 12  ·  3/5 today"
+reskill status --plain    # ASCII, safe for $PS1 / tmux status-right
+reskill streak            # 12-week github-style heatmap
+reskill stats             # level, XP, best combo, per-concept mastery
+```
+
+Drop this in your `~/.zshrc`:
+
+```bash
+PROMPT="$(reskill status --plain) $PROMPT"
+```
+
+## Controls (live wrap)
+
+| Key     | Action                       |
+|---------|------------------------------|
+| `1`-`4` | Answer the current quiz      |
+| `x`     | Skip this quiz               |
+| `X`     | Mute quizzes for the session |
+| `esc`   | Alias for `x`                |
+
+All other keys pass through to Claude unchanged. Permission prompts
+("Yes / No, and tell Claude") auto-pause quizzes so your 1/2/3 goes
+to Claude, not reSkill.
+
+## How the live wrap works
+
+- reSkill PTY-wraps the child command.
+- When a spinner shows up and the input looks like a submitted prompt,
+  a panel is pinned to the bottom via `\x1b[{top};{bottom}r` (DECSTBM
+  scroll region). Claude's Ink UI keeps streaming above.
+- On wrong/skipped answers, a teaching reveal slides in. On correct,
+  a single flash and you keep coding.
+- State lives in `~/.reskill/state.json`; per-project concept tallies
+  in `~/.reskill/project_cache/<hash>/`.
 
 ## Status
 
-Alpha. The template bank has ~20 thought-provoking questions across
-async, error handling, caching, JWT, databases, testing. More coming.
+Alpha. Template bank covers async, error handling, caching, JWT,
+databases, HTTP status codes, generators, context managers,
+comprehensions, FastAPI DI, and pytest. LLM-generated questions for
+novel diffs are next.
