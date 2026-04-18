@@ -28,15 +28,17 @@ def _term_width() -> int:
 
 
 def _box_width() -> int:
-    """Full-terminal-width box with small outer padding."""
+    """Fixed-size centered card. Feels like a popover, not a takeover."""
     tw = _term_width()
-    # Leave 2 chars of padding on each side
-    return max(50, min(tw - 4, 120))
+    # Target width: 64 chars; fall back to terminal width if narrow
+    return min(64, max(40, tw - 6))
 
 
 def _indent() -> str:
-    """Left padding to match the box's horizontal margin."""
-    return "  "
+    """Left padding that centers the box in the terminal."""
+    tw = _term_width()
+    pad = max(2, (tw - _box_width()) // 2)
+    return " " * pad
 
 
 def _pad_to(line: str, width: int) -> str:
@@ -91,50 +93,48 @@ def _render_options_grid(
     inner_width: int,
     answered_label: str | None = None,
 ) -> list[str]:
-    """Render options. 2-column grid if they all fit; single column otherwise.
+    """Render options in a single stacked column with wrapping.
 
-    If answered_label is None, this is the QUESTION view (plain options).
-    Otherwise it's the REVEAL view (highlight correct, mark chosen-wrong).
+    Each option may span multiple lines. The label (1/2/3/4) stays on
+    the first line; continuation lines are indented to align with the
+    option text.
     """
-    # Decide on layout
-    max_opt_len = max(len(f"  {o.label}) {o.text}") for o in q.options)
-    two_col_room = (inner_width - 2) // 2  # room per column with gap
-    use_grid = (max_opt_len <= two_col_room) and len(q.options) == 4
-
-    def _render_option(opt, column_width: int) -> str:
-        label = opt.label
-        text = opt.text
+    # Style chooser per option -- answered_label is None for question view
+    def _colors(opt) -> tuple[str, str, str]:
+        """Returns (label_color, text_color, marker_string)."""
         if answered_label is None:
-            # Question view
-            label_styled = paint(f"{label})", SAGE, BOLD)
-            text_styled = paint(text, INK)
-            marker = ""
-        elif opt.correct:
-            label_styled = paint(f"{label})", SAGE, BOLD)
-            text_styled = paint(text, SAGE, BOLD)
-            marker = paint("  \u2713", SAGE, BOLD)
-        elif answered_label == label and not opt.correct:
-            label_styled = paint(f"{label})", ROSE)
-            text_styled = paint(text, ROSE)
-            marker = paint("  \u2717", ROSE)
-        else:
-            label_styled = paint(f"{label})", DARK_ASH, DIM)
-            text_styled = paint(text, ASH, DIM)
-            marker = ""
-        piece = f" {label_styled} {text_styled}{marker}"
-        return _pad_to(piece, column_width)
+            return SAGE, INK, ""
+        if opt.correct:
+            return SAGE, SAGE, paint("  \u2713", SAGE, BOLD)
+        if answered_label == opt.label and not opt.correct:
+            return ROSE, ROSE, paint("  \u2717", ROSE)
+        return DARK_ASH, ASH, ""
 
     lines: list[str] = []
-    if use_grid:
-        col_w = two_col_room
-        for i in range(0, len(q.options), 2):
-            left = _render_option(q.options[i], col_w)
-            right = _render_option(q.options[i + 1], col_w) if i + 1 < len(q.options) else ""
-            lines.append(left + right)
-    else:
-        col_w = inner_width
-        for opt in q.options:
-            lines.append(_render_option(opt, col_w))
+    # " 1) " = 4 visible chars. Leave that gap on continuation lines.
+    label_prefix_visible = 4
+    indent_cont = " " * (label_prefix_visible + 1)
+    text_room = inner_width - label_prefix_visible - 2  # -2 for leading space + marker padding
+
+    for opt in q.options:
+        label_color, text_color, marker = _colors(opt)
+        wrapped = _wrap_text(opt.text, text_room)
+        bold_label = BOLD if (answered_label is None or opt.correct) else ""
+        bold_text = BOLD if (answered_label is not None and opt.correct) else ""
+        for i, line in enumerate(wrapped):
+            if i == 0:
+                label_part = paint(f" {opt.label}) ", label_color, bold_label)
+                text_part = paint(line, text_color, bold_text)
+                full = f"{label_part}{text_part}"
+                if marker and i == len(wrapped) - 1:
+                    full += marker
+                lines.append(full)
+            else:
+                text_part = paint(line, text_color, bold_text)
+                full = indent_cont + text_part
+                if marker and i == len(wrapped) - 1:
+                    full += marker
+                lines.append(full)
     return lines
 
 

@@ -268,31 +268,32 @@ def wrap(argv: list[str], quizzes_enabled: bool = True) -> int:
     # Quiz state
     pending_q: Question | None = None
     awaiting_answer = False
-    in_alt_screen = False           # True while quiz is on the alt screen
-    alt_screen_exit_at: float = 0.0 # if > 0, exit alt screen at this time
     last_quiz_at: float = 0.0
-    reveal_until: float = 0.0      # during this window don't show another quiz
+    reveal_until: float = 0.0           # during this window don't show another quiz
     suppress_quizzes_until: float = 0.0  # permission prompt cooldown
+
+    # When a quiz is visible, we HOLD Claude's new output (so Ink's repaints
+    # don't scramble our box). After the reveal, we flush the most recent state.
+    held_output = bytearray()
 
     exit_status = 0
 
-    def enter_alt_screen() -> None:
-        os.write(sys.stdout.fileno(), ALT_SCREEN_ENTER + CURSOR_HIDE)
-
-    def exit_alt_screen() -> None:
-        os.write(sys.stdout.fileno(), ALT_SCREEN_EXIT + CURSOR_SHOW)
+    def flush_held_output() -> None:
+        if not held_output:
+            return
+        # Don't replay the whole buffer -- just write a screen clear + cursor home
+        # so Ink can re-paint fresh on its next frame.
+        # But CC's Ink cursor accounting is line-relative, so we just discard
+        # and let its next cycle redraw.
+        held_output.clear()
 
     try:
         while True:
             now = time.time()
             if reveal_until and now > reveal_until:
                 reveal_until = 0.0
-
-            # If we're in alt screen and the reveal has had its time, leave.
-            if in_alt_screen and alt_screen_exit_at and now >= alt_screen_exit_at:
-                exit_alt_screen()
-                in_alt_screen = False
-                alt_screen_exit_at = 0.0
+                # Reveal window ended -- flush any held output and let Ink repaint
+                flush_held_output()
 
             r, _, _ = select.select([sys.stdin, master], [], [], 0.05)
 
@@ -309,19 +310,15 @@ def wrap(argv: list[str], quizzes_enabled: bool = True) -> int:
                 if len(recent_raw) > 4000:
                     del recent_raw[:-2000]
 
-                # Detect permission prompt -- must take priority over quizzes
+                # Permission prompt takes priority -- exit any in-flight quiz
                 if _detect_permission_prompt(bytes(recent_raw[-2000:])):
                     suppress_quizzes_until = now + cfg.permission_cooldown_ms / 1000.0
-                    if in_alt_screen:
-                        # Get out of the way NOW so the user sees the prompt
-                        exit_alt_screen()
-                        in_alt_screen = False
-                        alt_screen_exit_at = 0.0
-                        if awaiting_answer and pending_q is not None:
-                            state_mod.record_skip(state, pending_q.concept)
-                            state_mod.save(state)
-                            pending_q = None
-                            awaiting_answer = False
+                    if awaiting_answer and pending_q is not None:
+                        state_mod.record_skip(state, pending_q.concept)
+                        state_mod.save(state)
+                        pending_q = None
+                        awaiting_answer = False
+                        flush_held_output()
                 elif _detect_permission_resolved(bytes(recent_raw[-2000:])):
                     suppress_quizzes_until = min(
                         suppress_quizzes_until, now + 0.5
@@ -331,10 +328,14 @@ def wrap(argv: list[str], quizzes_enabled: bool = True) -> int:
                 if _detect_turn_end(bytes(recent_raw[-1000:])):
                     prompt_submitted_at = 0
 
-                # Forward output to the terminal ONLY if we're NOT in alt screen.
-                # While the quiz is visible, Claude's repaints are dropped --
-                # Ink will redraw correctly on its next frame after we switch back.
-                if not in_alt_screen:
+                # While a quiz/reveal is visible, HOLD Claude's new bytes so
+                # Ink's repaints don't scramble our box. We'll discard them
+                # when the reveal ends -- Ink redraws fresh on its next frame.
+                if awaiting_answer or reveal_until > now:
+                    held_output.extend(data)
+                    if len(held_output) > 50000:
+                        del held_output[:-25000]
+                else:
                     os.write(sys.stdout.fileno(), data)
 
                 # Accumulate stripped content for question generation
@@ -350,7 +351,6 @@ def wrap(argv: list[str], quizzes_enabled: bool = True) -> int:
                     and (now - prompt_submitted_at) * 1000 > cfg.submit_to_quiz_ms
                     and now > suppress_quizzes_until
                     and not awaiting_answer
-                    and not in_alt_screen
                     and now > reveal_until
                     and (now - last_quiz_at) > cfg.min_seconds_between_quizzes
                     and _is_thinking(data, bytes(recent_raw))
@@ -362,11 +362,12 @@ def wrap(argv: list[str], quizzes_enabled: bool = True) -> int:
                         pending_q = q
                         awaiting_answer = True
                         last_quiz_at = now
-                        # Switch to alt screen so CC's Ink UI is out of the way
-                        enter_alt_screen()
-                        in_alt_screen = True
-                        rendered = render_question(q, streak=state.streak)
-                        os.write(sys.stdout.fileno(), rendered.encode())
+                        # Render the quiz as one atomic write so Ink can't
+                        # interleave its repaints into the middle of our box.
+                        rendered = render_question(q, streak=state.streak).encode()
+                        # Prefix with a clear of the current line (where the
+                        # spinner is) so the box has a clean starting point.
+                        os.write(sys.stdout.fileno(), b"\r\x1b[2K" + rendered)
 
             if sys.stdin in r:
                 try:
@@ -399,17 +400,16 @@ def wrap(argv: list[str], quizzes_enabled: bool = True) -> int:
                             xp = state_mod.record_answer(
                                 state, pending_q.id, pending_q.concept, correct,
                             )
-                            rendered = render_answer_reveal(pending_q, label, xp)
+                            rendered = render_answer_reveal(pending_q, label, xp).encode()
                         else:
                             state_mod.record_skip(state, pending_q.concept)
-                            rendered = render_answer_reveal(pending_q, None, 0)
+                            rendered = render_answer_reveal(pending_q, None, 0).encode()
                             if skip_reason == "mute":
                                 session_muted = True
                         state_mod.save(state)
 
-                        # Clear alt screen, show the reveal
-                        os.write(sys.stdout.fileno(), b"\x1b[2J\x1b[H")
-                        os.write(sys.stdout.fileno(), rendered.encode())
+                        # Render the reveal inline, single atomic write
+                        os.write(sys.stdout.fileno(), rendered)
                         if skip_reason == "mute":
                             from .palette import paint, ASH, DIM
                             notice = paint(
@@ -420,9 +420,8 @@ def wrap(argv: list[str], quizzes_enabled: bool = True) -> int:
 
                         pending_q = None
                         awaiting_answer = False
+                        # Keep holding Claude's output until reveal window ends
                         reveal_until = time.time() + cfg.reveal_duration_ms / 1000.0
-                        # Stay on alt screen for reveal_duration_ms, then switch back
-                        alt_screen_exit_at = time.time() + cfg.reveal_duration_ms / 1000.0
 
                         data = data[1:]
                         if not data:
@@ -447,12 +446,11 @@ def wrap(argv: list[str], quizzes_enabled: bool = True) -> int:
     except KeyboardInterrupt:
         pass
     finally:
-        # Make sure we're not stranded on alt screen with cursor hidden
-        if in_alt_screen:
-            try:
-                os.write(sys.stdout.fileno(), ALT_SCREEN_EXIT + CURSOR_SHOW)
-            except OSError:
-                pass
+        # Ensure cursor is visible (in case we somehow stranded it hidden)
+        try:
+            os.write(sys.stdout.fileno(), CURSOR_SHOW)
+        except OSError:
+            pass
         if saved_tty is not None:
             _restore(saved_tty)
         try:
