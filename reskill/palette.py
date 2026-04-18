@@ -25,7 +25,9 @@ DIM = "\033[2m"
 def _theme() -> str:
     if os.environ.get("NO_COLOR"):
         return "mono"
-    return os.environ.get("RESKILL_THEME", "everforest").lower()
+    # Default: mono. Works on any terminal / any background. Users who
+    # want the Everforest palette can opt in with RESKILL_THEME=everforest.
+    return os.environ.get("RESKILL_THEME", "mono").lower()
 
 
 def rgb(r: int, g: int, b: int) -> str:
