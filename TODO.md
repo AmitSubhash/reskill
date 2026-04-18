@@ -70,11 +70,14 @@ The "quiz me on this week's commits" killer feature from research.
 
 ## Phase C3: Shell prompt widget + streak UI
 
-- [ ] `reskill status` -- terse line for $PS1 / tmux status-right
-      ("🔥 12 · 3/5 today")
-- [ ] Daily goal logic: counts toward goal on session completion
-- [ ] Streak freeze mechanic (one miss per week forgiven)
-- [ ] `reskill streak` for a visual weekly heatmap
+- [x] `reskill status` -- terse line for $PS1 / tmux status-right
+      ("🔥 12 · 3/5 today"), with --plain ASCII variant
+- [x] Daily goal logic: state.daily_goal (default 5), streak only
+      increments on a day that met the goal
+- [x] Streak freeze mechanic (auto-consumes freeze on missed day)
+- [x] `reskill streak` for a 12-week Github-style heatmap
+- [ ] Allow user to change daily_goal from the CLI
+      (`reskill goal 8`)
 
 ## Phase C4: Context detection polish (already 80% done)
 

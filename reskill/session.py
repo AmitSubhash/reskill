@@ -24,26 +24,44 @@ from .inline_box import (
     render_question,
     render_wrong_reveal,
 )
+from .log_session import CACHE_ROOT, _load_cache, _project_hash
 from .palette import ASH, BOLD, DARK_ASH, DIM, GOLD, SAGE, STONE, TEAL, paint
 from .question import Question, detect_concepts, TEMPLATE_BANK
 
 
+def _load_concept_weights(cwd: str | None) -> dict[str, int]:
+    """Per-project concept tally from the Stop-hook cache.
+
+    Returns an empty dict when nothing has been logged yet so callers
+    can blindly `.get(concept, 0)`.
+    """
+    cache_dir = CACHE_ROOT / _project_hash(cwd)
+    if not cache_dir.exists():
+        return {}
+    return dict(_load_cache(cache_dir).get("concepts", {}))
+
+
 def _deck_from_commits(
-    commits: list[CommitInfo], seen_ids: set[str], max_questions: int
+    commits: list[CommitInfo],
+    seen_ids: set[str],
+    max_questions: int,
+    concept_weights: dict[str, int] | None = None,
 ) -> list[tuple[Question, CommitInfo]]:
     """Match each commit to a relevant template question.
 
-    We keep the mapping commit -> question so the UI can show the user
-    which of their commits triggered each question -- the "oh yeah,
-    THAT commit" recognition that makes this feel personal.
+    When `concept_weights` is provided, concepts the user recently
+    touched in Claude Code sessions are tried first per commit.
     """
     deck: list[tuple[Question, CommitInfo]] = []
     used_ids: set[str] = set(seen_ids)
+    weights = concept_weights or {}
 
     for commit in commits:
         haystack = commit.subject + "\n" + "\n".join(commit.added_lines[:400])
         concepts = detect_concepts(haystack)
-        random.shuffle(concepts)
+        concepts.sort(
+            key=lambda c: (-weights.get(c, 0), random.random())
+        )
         for concept in concepts:
             bank = TEMPLATE_BANK.get(concept, [])
             fresh = [q for q in bank if q.id not in used_ids]
@@ -133,7 +151,8 @@ def run_session(
 
     state = state_mod.load()
     seen = set(state.seen_questions)
-    deck = _deck_from_commits(commits, seen, max_questions)
+    weights = _load_concept_weights(root)
+    deck = _deck_from_commits(commits, seen, max_questions, concept_weights=weights)
 
     if not deck:
         print(paint(f"  found {len(commits)} commits but no matching templates yet.", ASH))

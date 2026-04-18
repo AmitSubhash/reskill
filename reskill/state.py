@@ -27,6 +27,8 @@ class State:
     seen_questions: list[str] = field(default_factory=list)
     concepts: dict[str, dict] = field(default_factory=dict)
     enabled: bool = True   # global on/off; toggled via `reskill pause`/`resume`
+    daily_goal: int = 5    # questions per day to count toward streak
+    history: dict[str, int] = field(default_factory=dict)  # "YYYY-MM-DD" -> answered count
     # concepts[concept_key] = {"ef": 2.5, "interval": 1, "reps": 0, "last": 0.0, "correct": 0, "total": 0}
 
     @property
@@ -55,12 +57,15 @@ def load() -> State:
     today = date.today().isoformat()
     if s.last_date != today:
         # Day rollover
-        from datetime import timedelta
         if s.last_date:
             last = date.fromisoformat(s.last_date)
-            if (date.today() - last).days == 1 and s.answered_today > 0:
+            if s.answered_today > 0:
+                s.history[s.last_date] = s.answered_today
+            gap = (date.today() - last).days
+            met_goal = s.answered_today >= s.daily_goal
+            if gap == 1 and met_goal:
                 s.streak += 1
-            elif (date.today() - last).days > 1:
+            elif gap >= 1 and not met_goal:
                 if s.freezes > 0:
                     s.freezes -= 1
                 else:
@@ -70,6 +75,10 @@ def load() -> State:
         s.answered_today = 0
         s.combo = 0
         s.last_date = today
+        # Keep only the last ~120 days of history
+        if len(s.history) > 180:
+            for k in sorted(s.history.keys())[:-120]:
+                del s.history[k]
 
     return s
 

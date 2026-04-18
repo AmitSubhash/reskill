@@ -8,6 +8,8 @@ Usage:
   reskill uninstall            remove the Stop hook
   reskill hook-status          is the Stop hook installed?
   reskill log-session <path>   ingest a transcript (called by the Stop hook)
+  reskill status [--plain]     terse one-line status (for $PS1, tmux, etc.)
+  reskill streak               12-week heatmap of your answered days
   reskill demo                 interactive demo (no Claude Code required)
   reskill stats                show streak, XP, concept mastery
   reskill pause                turn quizzes OFF globally
@@ -191,6 +193,15 @@ def main(argv: list[str] | None = None) -> int:
             transcript_path=(rest[0] if rest else _read_hook_stdin()),
             cwd=os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd(),
         )
+    if cmd == "status":
+        from .status_ui import render_status
+        plain = "--plain" in rest
+        print(render_status(plain=plain))
+        return 0
+    if cmd == "streak":
+        from .status_ui import render_heatmap
+        print(render_heatmap())
+        return 0
 
     print(f"reskill: unknown command '{cmd}'", file=sys.stderr)
     return cmd_help()
