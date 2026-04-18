@@ -17,6 +17,9 @@ from .palette import ASH, BOLD, DARK_ASH, DIM, SAGE, paint
 
 SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
 HOOK_MARKER = "reskill log-session"
+THINKING_MARKER = "reskill-thinking-flag"
+STATE_DIR = Path.home() / ".reskill" / "state"
+THINKING_FILE = STATE_DIR / "thinking"
 
 
 def _find_reskill_binary() -> str:
@@ -28,16 +31,36 @@ def _find_reskill_binary() -> str:
     return "reskill"
 
 
-def _build_hook_entry() -> dict:
-    """Return the JSON object that goes in Stop[].hooks[].
-
-    Claude Code pipes a JSON object with `transcript_path` via stdin,
-    so we let `reskill log-session` read it from stdin rather than env.
-    """
+def _build_log_hook() -> dict:
+    """Stop-event hook: ingest the transcript into the concept cache."""
     return {
         "type": "command",
         "command": f"{_find_reskill_binary()} log-session 2>>/tmp/reskill-hook.log",
         "timeout": 10,
+        "async": True,
+    }
+
+
+def _build_thinking_on_hook() -> dict:
+    """PreToolUse hook: signal Claude is mid-thought. Marker lets us find
+    and remove this entry on uninstall."""
+    return {
+        "type": "command",
+        "command": (
+            f"mkdir -p {STATE_DIR} && touch {THINKING_FILE} "
+            f"# {THINKING_MARKER}"
+        ),
+        "timeout": 2,
+        "async": True,
+    }
+
+
+def _build_thinking_off_hook() -> dict:
+    """Stop hook + PostToolUse: clear the thinking signal."""
+    return {
+        "type": "command",
+        "command": f"rm -f {THINKING_FILE} # {THINKING_MARKER}",
+        "timeout": 2,
         "async": True,
     }
 
@@ -63,74 +86,109 @@ def _save_settings(settings: dict) -> None:
     SETTINGS_PATH.write_text(json.dumps(settings, indent=2) + "\n")
 
 
-def _has_reskill_hook(stop_array: list) -> bool:
-    for entry in stop_array:
-        for hook in entry.get("hooks", []):
-            if HOOK_MARKER in hook.get("command", ""):
+def _is_reskill_hook(hook: dict) -> bool:
+    cmd = hook.get("command", "")
+    return HOOK_MARKER in cmd or THINKING_MARKER in cmd
+
+
+def _has_any_reskill_hook(settings: dict) -> bool:
+    for event in ("Stop", "PreToolUse", "PostToolUse"):
+        for entry in settings.get(event, []):
+            if any(_is_reskill_hook(h) for h in entry.get("hooks", [])):
                 return True
     return False
 
 
-def install() -> int:
-    """Install the Stop hook. Idempotent."""
-    settings = _load_settings()
-    stop = settings.setdefault("Stop", [])
+def _append_hook(settings: dict, event: str, hook: dict) -> None:
+    arr = settings.setdefault(event, [])
+    arr.append({"matcher": "*", "hooks": [hook]})
 
-    if _has_reskill_hook(stop):
-        print(paint("  reskill hook already installed", ASH, DIM))
+
+def install(with_statusline: bool = True) -> int:
+    """Install all reskill hooks + (optionally) the statusLine. Idempotent.
+
+    Hooks:
+      - UserPromptSubmit: sets the thinking flag (user just submitted)
+      - PreToolUse:       keeps it set as Claude starts tools
+      - PostToolUse:      clears it when tool completes
+      - Stop:             clears it + logs the transcript into cache
+    """
+    settings = _load_settings()
+    already = _has_any_reskill_hook(settings)
+    if already:
+        print(paint("  reskill hooks already installed", ASH, DIM))
+    else:
+        _append_hook(settings, "Stop", _build_log_hook())
+        _append_hook(settings, "Stop", _build_thinking_off_hook())
+        _append_hook(settings, "UserPromptSubmit", _build_thinking_on_hook())
+        _append_hook(settings, "PreToolUse", _build_thinking_on_hook())
+        _append_hook(settings, "PostToolUse", _build_thinking_off_hook())
+
+    if with_statusline and "statusLine" not in settings:
+        settings["statusLine"] = {
+            "type": "command",
+            "command": f"{_find_reskill_binary()} statusline",
+            "refreshInterval": 2,
+            "padding": 2,
+        }
+        print(paint("  statusLine configured", SAGE, BOLD))
+
+    if already and (not with_statusline or "statusLine" in settings and settings["statusLine"].get("command", "").endswith("reskill statusline")):
         return 0
 
-    stop.append(
-        {
-            "matcher": "*",
-            "hooks": [_build_hook_entry()],
-        }
-    )
     _save_settings(settings)
-    print(paint("  reskill Stop hook installed", SAGE, BOLD))
-    print(
-        paint(
-            "  every Claude Code session end will now enqueue question candidates",
-            ASH,
-            DIM,
+    if not already:
+        print(paint("  reskill hooks installed", SAGE, BOLD))
+        print(
+            paint(
+                "  UserPromptSubmit / PreToolUse / PostToolUse / Stop -- "
+                "the quiz pane + statusline know when Claude is mid-thought",
+                ASH,
+                DIM,
+            )
         )
-    )
     print(paint(f"  backup saved to {SETTINGS_PATH}.reskill-bak", DARK_ASH, DIM))
     return 0
 
 
 def uninstall() -> int:
-    """Remove reskill's Stop hook. Safe if not installed."""
+    """Remove every reskill hook entry and the statusLine. Safe if absent."""
     settings = _load_settings()
-    stop = settings.get("Stop", [])
-    before = len(stop)
+    removed = False
+    for event in ("Stop", "PreToolUse", "PostToolUse", "UserPromptSubmit"):
+        arr = settings.get(event, [])
+        cleaned: list[dict] = []
+        any_removed_here = False
+        for entry in arr:
+            orig = entry.get("hooks", [])
+            kept = [h for h in orig if not _is_reskill_hook(h)]
+            if len(kept) != len(orig):
+                any_removed_here = True
+            if kept:
+                entry["hooks"] = kept
+                cleaned.append(entry)
+        if any_removed_here:
+            removed = True
+            settings[event] = cleaned
 
-    cleaned: list[dict] = []
-    for entry in stop:
-        hooks = [h for h in entry.get("hooks", []) if HOOK_MARKER not in h.get("command", "")]
-        if hooks:
-            entry["hooks"] = hooks
-            cleaned.append(entry)
+    sl = settings.get("statusLine", {})
+    if isinstance(sl, dict) and "reskill statusline" in sl.get("command", ""):
+        del settings["statusLine"]
+        removed = True
 
-    if len(cleaned) == before and not any(
-        HOOK_MARKER in h.get("command", "")
-        for entry in stop
-        for h in entry.get("hooks", [])
-    ):
-        print(paint("  reskill hook was not installed; nothing to do", ASH, DIM))
+    if not removed:
+        print(paint("  reskill hooks were not installed; nothing to do", ASH, DIM))
         return 0
 
-    settings["Stop"] = cleaned
     _save_settings(settings)
-    print(paint("  reskill Stop hook removed", SAGE, BOLD))
+    print(paint("  reskill hooks + statusline removed", SAGE, BOLD))
     return 0
 
 
 def status() -> int:
-    """Report whether the hook is installed."""
+    """Report whether the hooks are installed."""
     settings = _load_settings()
-    stop = settings.get("Stop", [])
-    if _has_reskill_hook(stop):
+    if _has_any_reskill_hook(settings):
         print(paint("  installed", SAGE, BOLD), paint(f"in {SETTINGS_PATH}", ASH, DIM))
     else:
         print(paint("  not installed", ASH))

@@ -57,12 +57,15 @@ _SPINNER_BYTES = {
     c.encode("utf-8")
     for c in "\u280b\u2819\u2839\u2838\u283c\u2834\u2826\u2827\u2807\u280f"
 }
+# These are the star/sparkle frames Claude Code cycles through when idle.
+# We DELIBERATELY exclude common bullet/marker glyphs that appear in Claude's
+# response body. Notably U+25CF (●) is Claude's bullet prefix for list items
+# in streamed responses -- including it here caused quizzes to fire AFTER
+# Claude finished thinking.
 _SPINNER_GLYPHS = {
     c.encode("utf-8")
     for c in (
-        "\u00b7\u2722\u2733\u2736\u273b\u273d"
-        "\u23fa\u25cf\u2219"
-        "\u25cb\u25d0\u25c9"
+        "\u2722\u2733\u2736\u273b\u273d"   # sparkle/star frames (✢ ✳ ✶ ✻ ✽)
     )
 }
 _SPINNER_VERB_KEYWORDS = {
@@ -131,15 +134,30 @@ _TURN_END_PATTERNS = [
 
 
 def _is_thinking(data: bytes, recent_raw: bytes) -> bool:
+    """True iff Claude's spinner is active.
+
+    Rules (tightened after quizzes fired on response bullets):
+      - Require a carriage return in the recent window. Ink's spinner
+        updates in place via \\r; if there's been no \\r in the last
+        few chunks, Claude is streaming response text, not spinning.
+      - Then require a Braille glyph (the actual spinner animation
+        frame used by cli-spinners "dots") OR a sparkle frame.
+      - Verb keywords alone are NOT sufficient -- "Working", "Cooking",
+        "Thinking" all appear in natural response text.
+    """
     stripped = _ANSI_RE.sub(b"", data)
     if len(stripped) > 400:
         return False
-    if any(s in data for s in _SPINNER_BYTES):
-        return True
-    if any(g in data for g in _SPINNER_GLYPHS):
-        return True
-    window = recent_raw[-1500:].lower()
-    return any(kw in window for kw in _SPINNER_VERB_KEYWORDS)
+    window = recent_raw[-500:]
+    if b"\r" not in window and b"\r" not in data:
+        return False
+    has_braille = any(s in window for s in _SPINNER_BYTES) or any(s in data for s in _SPINNER_BYTES)
+    has_sparkle = any(g in window for g in _SPINNER_GLYPHS) or any(g in data for g in _SPINNER_GLYPHS)
+    if not (has_braille or has_sparkle):
+        return False
+    # Confirmation: a spinner verb must also be in the recent window.
+    recent_lower = recent_raw[-800:].lower()
+    return any(kw in recent_lower for kw in _SPINNER_VERB_KEYWORDS)
 
 
 def _detect_permission(recent: bytes) -> bool:
@@ -445,8 +463,11 @@ def wrap(argv: list[str], quizzes_enabled: bool = True) -> int:
                     if q is not None:
                         last_quiz_at = time.time()
                         run_quiz(q)
-                        # After quiz ends: loop continues normally.
-                        # Reset prompt_submitted_at only if turn is ending.
+                        # One quiz per user turn: if the user wants another,
+                        # they'll type a new prompt. This prevents the
+                        # "quiz keeps popping up after Claude finished"
+                        # loop the user hit.
+                        prompt_submitted_at = 0
 
             if sys.stdin in r:
                 try:

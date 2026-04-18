@@ -1,12 +1,13 @@
 """reskill -- learn during AI thinking time.
 
 Usage:
-  reskill claude [args...]     wrap `claude` with inline quizzes (the real deal)
-  reskill run <cmd> [args...]  wrap any command with inline quizzes
+  reskill claude [args...]     launch claude in a tmux split with a quiz pane
+  reskill quiz-panel           the pane itself (usually spawned by `claude`)
   reskill session [--since 7d] quiz deck built from your recent commits
-  reskill install              install Claude Code Stop hook for auto-ingest
-  reskill uninstall            remove the Stop hook
-  reskill hook-status          is the Stop hook installed?
+  reskill install              install the Claude Code hooks (PreToolUse,
+                               PostToolUse, Stop) that signal the quiz pane
+  reskill uninstall            remove the hooks
+  reskill hook-status          are the hooks installed?
   reskill log-session <path>   ingest a transcript (called by the Stop hook)
   reskill status [--plain]     terse one-line status (for $PS1, tmux, etc.)
   reskill streak               12-week heatmap of your answered days
@@ -15,6 +16,9 @@ Usage:
   reskill pause                turn quizzes OFF globally
   reskill resume               turn quizzes back ON
   reskill question             render a sample quiz box (UI sanity check)
+  reskill wrap <cmd> [args]    legacy PTY-wrap (DECSTBM; DEPRECATED -- does
+                               not cooperate with Ink/Claude Code; kept
+                               only for non-Ink programs)
 
 Flags:
   --no-quiz                    disable quizzes for this invocation only
@@ -152,20 +156,23 @@ def main(argv: list[str] | None = None) -> int:
 
     if cmd in ("-h", "--help", "help"):
         return cmd_help()
+    if cmd == "wrap":
+        # Legacy PTY-wrap. Does NOT work with Claude Code's Ink renderer --
+        # kept only for non-Ink programs.
+        return cmd_run(rest)
     if cmd == "run":
+        # Legacy alias.
         return cmd_run(rest)
     if cmd == "claude":
-        # Shortcut: reskill claude [flags]... [args]
-        # Support --no-quiz anywhere, not just at the front.
-        no_quiz = False
-        filtered_rest: list[str] = []
-        for a in rest:
-            if a == "--no-quiz":
-                no_quiz = True
-            else:
-                filtered_rest.append(a)
-        inner = ["--no-quiz", "claude"] + filtered_rest if no_quiz else ["claude"] + filtered_rest
-        return cmd_run(inner)
+        from . import tmux_launcher
+        tmux_launcher.ensure_banner()
+        return tmux_launcher.launch(rest)
+    if cmd == "quiz-panel":
+        from . import quiz_panel
+        return quiz_panel.run()
+    if cmd == "statusline":
+        from . import statusline
+        return statusline.run()
     if cmd == "demo":
         return cmd_demo()
     if cmd == "stats":

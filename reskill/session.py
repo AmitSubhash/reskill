@@ -77,10 +77,16 @@ def _deck_from_commits(
     return deck
 
 
-def _set_raw() -> list[int]:
+def _set_cbreak() -> list[int]:
+    """cbreak: keys read unbuffered but output newlines still become CRLF.
+
+    Using setraw() here (as an earlier revision did) disables OPOST, which
+    made every `\\n` in rendered panels render as a bare LF and staircase
+    the reveal off-screen — the "stuck after skip" user complaint.
+    """
     fd = sys.stdin.fileno()
     saved = termios.tcgetattr(fd)
-    tty.setraw(fd)
+    tty.setcbreak(fd)
     return saved  # type: ignore[return-value]
 
 
@@ -96,6 +102,27 @@ def _read_key(timeout: float | None = None) -> bytes | None:
         return os.read(sys.stdin.fileno(), 8)
     except OSError:
         return None
+
+
+def _wait_for_continue(max_wait: float = 8.0) -> None:
+    """After a reveal, wait for any key (or auto-advance) with a visible hint.
+
+    Without this, the user just sees the box and wonders if they're stuck.
+    The cue + short max_wait eliminates the "skip feels frozen" feedback.
+    """
+    hint = paint(
+        "  any key to continue", ASH, DIM,
+    )
+    sys.stdout.write("\r" + hint)
+    sys.stdout.flush()
+    start = time.time()
+    while time.time() - start < max_wait:
+        key = _read_key(timeout=0.3)
+        if key is not None:
+            break
+    # Clear the hint line so it doesn't linger in scrollback
+    sys.stdout.write("\r" + " " * (len(hint) + 10) + "\r")
+    sys.stdout.flush()
 
 
 def _commit_chip(commit: CommitInfo) -> str:
@@ -167,7 +194,7 @@ def run_session(
 
     saved_tty = None
     if sys.stdin.isatty():
-        saved_tty = _set_raw()
+        saved_tty = _set_cbreak()
 
     try:
         for idx, (question, commit) in enumerate(deck, start=1):
@@ -212,8 +239,7 @@ def run_session(
                     time.sleep(0.9)
                 else:
                     sys.stdout.write(render_wrong_reveal(question, chosen=label))
-                    sys.stdout.flush()
-                    _read_key(timeout=6.0)
+                    _wait_for_continue()
             else:
                 state_mod.record_skip(state, question.concept)
                 state_mod.save(state)
@@ -222,8 +248,7 @@ def run_session(
                         paint("  (time's up)", ASH, DIM) + "\n\n"
                     )
                 sys.stdout.write(render_wrong_reveal(question, chosen=None))
-                sys.stdout.flush()
-                _read_key(timeout=6.0)
+                _wait_for_continue()
 
         state = state_mod.load()
         print()

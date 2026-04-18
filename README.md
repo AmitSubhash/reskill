@@ -1,37 +1,56 @@
 # reSkill
 
-Turn AI thinking time into developer growth. Inline quizzes that pop
-while Claude Code is thinking, a commit-driven deck for deliberate
-practice, and a streak you care about.
+Turn AI thinking time into developer growth. Interactive quizzes that
+run in a **tmux pane alongside Claude Code**, a live badge in Claude
+Code's statusline, and a commit-driven post-session deck for deliberate
+practice.
+
+## Why not just overlay on top of Claude Code?
+
+Tried it. Doesn't work. Claude Code uses Ink (React), which repaints
+via relative cursor moves and periodic full-screen clears -- it always
+thinks it owns the entire terminal. Our earlier PTY-wrap + DECSTBM
+scroll-region approach looked fine in synthetic tests and collapsed in
+real use (borders scattered, quizzes firing on response bullets,
+panel overwritten by Ink repaints).
+
+The architecture that actually works:
+
+  * **tmux split-pane** for the interactive quiz -- Claude gets one
+    pane, reSkill gets the other. Two independent PTYs, zero
+    escape-sequence collision.
+  * **Claude Code statusLine** for ambient display -- Ink itself
+    reserves the row, debounces, and hides during permission prompts.
+    Not interactive, but always visible.
+  * **`reskill session`** for post-run deliberate practice on the
+    commits you just shipped.
 
 ## Install
 
 ```bash
 cd ~/Projects/reskill
 pip install -e .
+brew install tmux           # required for `reskill claude`
+reskill install             # adds hooks + statusLine to ~/.claude/settings.json
 ```
 
-## The two ways to use it
+## The three ways to use it
 
-### 1. Live quizzes while Claude thinks (`reskill claude`)
-
-Wrap Claude Code. A small panel pins to the bottom of your terminal
-when Claude is mid-thought; your answers (1-4, `x` skip, `X` mute)
-never leak through to Claude. Built on a DECSTBM scroll-region so
-Claude's UI keeps streaming above the panel with no alt-screen
-switch.
+### 1. `reskill claude` -- tmux split-pane launcher
 
 ```bash
-reskill claude                       # shortcut for `reskill run claude`
-reskill run claude --continue        # or any args
-reskill run claude /plan "fix bug"   # any claude subcommand
+reskill claude                      # claude in main pane, quiz in side pane
+reskill claude --continue
+reskill claude /plan "..."
 ```
 
-### 2. Quiz me on what I shipped this week (`reskill session`)
+Claude runs in the left pane exactly as normal. A `reskill quiz-panel`
+runs in the right pane and watches a file signal (`~/.reskill/state/
+thinking`) written by the Claude Code hooks we installed. When Claude
+is mid-thought, a question appears. You answer with 1/2/3/4, `x`
+skips, `q` exits the pane.
 
-Reads the last N days of `git log` in the current repo, matches each
-commit's diff against the concept patterns, and walks you through a
-small deck that's stocked with *your* recent work.
+### 2. `reskill session` -- git-log deliberate practice
 
 ```bash
 reskill session                  # last 7 days, 5 questions
@@ -39,26 +58,20 @@ reskill session --since 14d
 reskill session --since 24h --max 3
 ```
 
-Each quiz shows a small "from <commit sha> <subject>" chip so you
-recognize which commit the question came from.
+Parses `git log` in the current repo, matches each commit's diff
+against the concept patterns, and walks you through a deck stocked
+with your own recent work. Each quiz shows a "from <sha> <subject>"
+chip so you know which commit triggered the question.
 
-## Learning loop (optional but recommended)
+### 3. statusLine badge (always on)
 
-Install a Claude Code Stop hook that ingests your session transcripts
-as they end. The hook extracts concepts your session actually touched
-and tallies them per-project; `reskill session` then weights your
-deck toward those concepts.
+Once `reskill install` has run, Claude Code calls
+`reskill statusline` every 2 seconds. You'll see:
 
-```bash
-reskill install        # adds a Stop hook to ~/.claude/settings.json
-reskill uninstall      # removes it
-reskill hook-status    # check install state
-```
+- idle: `reskill · day 3 · 2/5 today · 470 xp`
+- during a turn: `reskill  quiz pane is live / 🔥 3  ·  2/5 today  ·  quiz this turn`
 
-The installer backs up your existing `settings.json` to
-`settings.json.reskill-bak`.
-
-## Streak + status
+## Status + streak
 
 ```bash
 reskill status            # terse one-liner: "🔥 12  ·  3/5 today"
@@ -70,32 +83,42 @@ reskill stats             # level, XP, best combo, per-concept mastery
 Drop this in your `~/.zshrc`:
 
 ```bash
-PROMPT="$(reskill status --plain) $PROMPT"
+PROMPT='$(reskill status --plain) %# '
 ```
 
-## Controls (live wrap)
+## Controls in the quiz pane
 
 | Key     | Action                       |
 |---------|------------------------------|
 | `1`-`4` | Answer the current quiz      |
 | `x`     | Skip this quiz               |
-| `X`     | Mute quizzes for the session |
 | `esc`   | Alias for `x`                |
+| `q`     | Quit the quiz pane           |
 
-All other keys pass through to Claude unchanged. Permission prompts
-("Yes / No, and tell Claude") auto-pause quizzes so your 1/2/3 goes
-to Claude, not reSkill.
+Your answer cannot leak to Claude -- the panes are isolated PTYs.
 
-## How the live wrap works
+## How the hooks wire up
 
-- reSkill PTY-wraps the child command.
-- When a spinner shows up and the input looks like a submitted prompt,
-  a panel is pinned to the bottom via `\x1b[{top};{bottom}r` (DECSTBM
-  scroll region). Claude's Ink UI keeps streaming above.
-- On wrong/skipped answers, a teaching reveal slides in. On correct,
-  a single flash and you keep coding.
-- State lives in `~/.reskill/state.json`; per-project concept tallies
-  in `~/.reskill/project_cache/<hash>/`.
+`reskill install` edits `~/.claude/settings.json` (with a backup) to add:
+
+- `UserPromptSubmit` + `PreToolUse` -- touch `~/.reskill/state/thinking`
+- `PostToolUse` + `Stop` -- remove that file
+- `Stop` -- also call `reskill log-session` to ingest the transcript
+  into the per-project concept cache at `~/.reskill/project_cache/`
+- `statusLine` -- point at `reskill statusline` with a 2s refresh
+
+`reskill uninstall` removes only those entries; your existing hooks
+are untouched.
+
+## What's in the box (data)
+
+- `~/.reskill/state.json` -- streak, XP, per-concept mastery (SM-2)
+- `~/.reskill/project_cache/<hash>/concepts.json` -- per-project
+  concept tally from ingested session transcripts; used by
+  `reskill session` and `reskill quiz-panel` to prioritize concepts
+  you've actually touched
+- `~/.reskill/state/thinking` -- flag file, presence means "Claude is
+  mid-thought right now"
 
 ## Status
 

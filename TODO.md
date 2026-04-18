@@ -1,6 +1,6 @@
-# reSkill -- End-to-End Build Plan (C + D)
+# reSkill -- End-to-End Build Plan
 
-Living todo list. Grows as work reveals new sub-tasks. Items marked:
+Living todo list. Items marked:
 - [ ] open
 - [>] in progress
 - [x] done
@@ -8,95 +8,100 @@ Living todo list. Grows as work reveals new sub-tasks. Items marked:
 
 ---
 
-## Phase D1: Region overlay prototype (the technical wedge)
+## Architecture (settled after real-world testing 2026-04-18)
 
-- [x] Standalone prototype /tmp/region_proto.py -- ANSI sequences correct,
-      scroll region + panel + save/restore pattern works
-- [x] Integrated into reskill.region.Region class
-- [x] Tested against REAL Claude Code via tmux: quiz box renders CLEANLY
-      in the bottom region, Claude's UI + response stream above.
-      THE SCROLL REGION APPROACH WORKS. 🎉
-- [x] Options 4 getting clipped when terminal is short (40 rows) --
-      fixed with compact mode + code truncation (inline_box.py)
-- [ ] Handle SIGWINCH (terminal resize) -- region needs recalculation
-- [ ] Handle edge: region too small for panel content (terminal < 30 lines)
-- [ ] Verify in iTerm2, Terminal.app (not just tmux), WezTerm
-- [x] SHIP IT. Falling back to C on top of this.
+The PTY-wrap + DECSTBM scroll-region approach cannot work with Claude
+Code. Ink repaints via `CUU + EL` (relative cursor up + erase-in-line)
+anchored to the current cursor row, and periodically issues
+`\x1b[2J\x1b[3J\x1b[H` (full clear + scrollback wipe, Ink issue #935).
+DECSTBM only constrains newline-driven scrolling -- neither of those
+sequences are bounded. No public Ink API exists to reserve rows
+(issues #263, #182, #442, #78).
 
-## Phase D2: Integrate region overlay into wrap.py
+Research confirmed the two surfaces that DO work:
 
-- [ ] Replace current "hold bytes + render inline" in run_quiz with
-      region overlay rendering
-- [ ] Claude's output keeps streaming to the main area (DON'T hold bytes)
-- [ ] Quiz panel renders in bottom region, updates countdown in place
-- [ ] On permission prompt detection: clear region immediately, let
-      Claude's prompt render above as normal
-- [ ] Commit + write end-to-end test
+  1. tmux split-pane launcher -- two independent PTYs, zero collision,
+     fully interactive quiz. This is the primary `reskill claude` path.
+  2. Claude Code statusLine -- Ink itself reserves the row, debounced,
+     auto-hides for permission prompts. Non-interactive but persistent.
+
+## Phase D (overlay) -- ABANDONED, replaced by tmux split
+
+- [~] PTY-wrap + DECSTBM overlay -- proven catastrophic in real use
+      (quiz borders scatter across screen, Claude's Ink clobbers panel,
+      quiz fires on response bullets). See commit/research notes.
+- [x] `reskill claude` -- tmux split-pane launcher
+      (reskill/tmux_launcher.py)
+- [x] `reskill quiz-panel` -- interactive quiz UI in the side pane
+      (reskill/quiz_panel.py)
+- [x] `reskill statusline` -- passive display for Claude's bottom row
+      (reskill/statusline.py)
+- [x] Thinking-flag IPC between Claude (via hooks) and the quiz pane
+      (~/.reskill/state/thinking)
+- [ ] Handle tmux pane resize gracefully (quiz pane should reflow)
+- [ ] If user has no tmux, fall back to `reskill session` after each
+      Claude Stop hook instead of trying to overlay
 
 ## Phase C1: Session command and commit-based questions
-
-The "quiz me on this week's commits" killer feature from research.
 
 - [x] `reskill session` command entry point (cli.py: cmd_session)
 - [x] `reskill session --since 7d` flag (also --from-commits alias)
 - [x] Git log parser: extract commits from N days with their diffs
-      (reskill/git_diffs.py)
-- [x] Commit-to-question generator: template-based matching against
-      detect_concepts over commit subject + added lines
-- [x] Integrate with existing SM-2 state machinery (record_answer/skip)
-- [ ] LLM-based question gen for novel diffs (Haiku, pre-generated, cached)
+- [x] Commit-to-question generator: template-based matching
+- [x] Integrate with existing SM-2 state machinery
+- [x] cbreak mode (not raw) so reveal newlines render correctly
+- [x] "any key to continue" hint after reveal to fix "stuck after skip"
+- [ ] LLM-based question gen for novel diffs (Haiku, pre-generated)
 - [ ] Question cache at `~/.reskill/project_cache/<project_hash>/`
-- [ ] Show the diff snippet that triggered the question (just commit
-      chip for now; deeper drill-in later)
+- [ ] Show the diff snippet that triggered the question
 
-## Phase C2: Stop hook integration
+## Phase C2: Hooks
 
-- [x] `reskill install` command:
-  - [x] Writes Stop hook to `~/.claude/settings.json`
-  - [x] Hook calls `reskill log-session` (transcript via stdin JSON)
-  - [x] Idempotent (detects marker string, skips re-install)
-  - [x] `reskill uninstall` removes the hook
-  - [x] `reskill hook-status` reports install state
-- [x] `reskill log-session` command:
-  - [x] Reads Claude Code session transcript JSONL
-  - [x] Extracts concepts/patterns/tools used via detect_concepts
-  - [x] Enqueues concept tally into ~/.reskill/project_cache/<hash>/
-  - [x] Writes a non-blocking single-line notice to stderr
-- [ ] Verify against a real Claude Code session transcript format
-      (tested against synthetic JSONL; real path probably works but
-      untested end-to-end)
-- [ ] Use cached concept tallies to PRIORITIZE question selection in
-      `reskill session` (currently session only uses git commits)
+- [x] `reskill install`: writes UserPromptSubmit + PreToolUse +
+      PostToolUse + Stop hooks AND the statusLine config
+- [x] `reskill uninstall`: removes only reskill's entries
+- [x] `reskill hook-status`: reports install state
+- [x] `reskill log-session`: ingests Claude Code JSONL, tallies
+      concepts into per-project cache
+- [ ] Verify against a REAL Claude Code session transcript format
 
 ## Phase C3: Shell prompt widget + streak UI
 
 - [x] `reskill status` -- terse line for $PS1 / tmux status-right
-      ("🔥 12 · 3/5 today"), with --plain ASCII variant
-- [x] Daily goal logic: state.daily_goal (default 5), streak only
-      increments on a day that met the goal
-- [x] Streak freeze mechanic (auto-consumes freeze on missed day)
-- [x] `reskill streak` for a 12-week Github-style heatmap
-- [ ] Allow user to change daily_goal from the CLI
-      (`reskill goal 8`)
+- [x] --plain ASCII variant
+- [x] Daily goal logic (state.daily_goal)
+- [x] Streak freeze mechanic
+- [x] `reskill streak` -- 12-week heatmap
 
-## Phase C4: Context detection polish (already 80% done)
+## Phase C4: Polish (ongoing)
 
-- [ ] Expand detect.py to use lockfiles (package-lock, poetry.lock)
-- [ ] Detect recently-edited files (last 20 by mtime)
-- [ ] Framework signals: grep for key imports beyond just package deps
-- [ ] Cache detection result per-project (fast on re-runs)
+- [ ] Allow `reskill goal N` to adjust daily goal
+- [ ] Expand detect.py / question patterns
+- [ ] Cache detection per-project
+- [ ] Uninstall leaves empty `[]` arrays; prune them
 
-## Phase E: Cleanup and polish
+## Phase E: Cleanup
 
-- [ ] Deprecate `reskill run <cmd>` wrap (it's a dead path)
-- [ ] Simplify `reskill claude` to show a helpful message:
-      "This requires region overlay support. Try `reskill session` instead."
-      OR remove entirely if D1 succeeds
-- [ ] Update README with new architecture
-- [ ] Package for pip install
-- [ ] First-run setup wizard: detect shell, offer hook install, offer
-      prompt widget install
+- [x] Update README with new architecture (tmux + statusline)
+- [~] Deprecate `reskill run` / `reskill wrap` in messaging
+- [ ] Delete reskill/region.py (dead code now)
+- [ ] Delete reskill/wrap.py (dead code, replaced by tmux_launcher)
+- [ ] Package for pip install (TestPyPI first)
 
-## Discovered issues (will be filled in as we go)
+## Known bugs fixed in this pass
 
-(Nothing yet. Items land here as work uncovers them.)
+- [x] Quiz fires on Claude's response bullets (`●`) -- removed from
+      spinner glyphs. Requires Braille + verb for positive detection.
+- [x] "Stuck after skip" -- session.py was using `tty.setraw` which
+      disables output processing; switched to `tty.setcbreak`.
+- [x] "Quiz keeps popping up after Claude answer" -- set
+      `prompt_submitted_at = 0` after each quiz, so one quiz per turn.
+- [x] Rendering scrambled in live wrap -- fundamental Ink collision,
+      fixed by abandoning the overlay approach entirely.
+
+## Tests
+
+- [x] tests/test_wrap_detection.py -- 12 regression tests covering
+      spinner false positives (bullets in response), true positives
+      (Braille + verb), turn-end detection, and permission detection.
+      These should have existed from day 1.
