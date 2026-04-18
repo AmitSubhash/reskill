@@ -160,6 +160,56 @@ def test_concepts_ready_with_overdue():
     assert new >= 1
 
 
+def test_85_percent_rule_prefers_concept_near_sweet_spot():
+    """Within a bucket, a concept at ~15% error rate should win over
+    one at 0% (mastered) or 60% (way too hard right now).
+    """
+    now = time.time()
+    # All three concepts have been answered (so they're not "new"),
+    # and are all overdue.
+    mastered = {
+        "ef": 2.5, "interval": 1, "reps": 5,
+        "last": now - 3 * 86400,
+        "correct": 10, "total": 10,      # 0% error
+    }
+    sweet = {
+        "ef": 2.5, "interval": 1, "reps": 5,
+        "last": now - 3 * 86400,
+        "correct": 9, "total": 10,       # 10% error
+    }
+    too_hard = {
+        "ef": 1.3, "interval": 1, "reps": 0,
+        "last": now - 3 * 86400,
+        "correct": 4, "total": 10,       # 60% error
+    }
+    state = State()
+    state.concepts["caching"] = mastered
+    state.concepts["error-handling"] = sweet
+    state.concepts["identity"] = too_hard
+
+    # Live text hits all three concepts.
+    live = "@lru_cache and try/except and `is None`"
+    picks_concepts = []
+    seen: set[str] = set()
+    for _ in range(10):
+        p = choose(
+            live_text=live,
+            commit_text="",
+            state=state,
+            seen_ids=seen,
+        )
+        if p is None:
+            break
+        picks_concepts.append(p.concept)
+        seen.add(p.question.id)
+
+    # The first pick should be the sweet-spot concept (error-handling
+    # at 10% vs mastered's 0% vs too_hard's 60%).
+    assert picks_concepts[0] == "error-handling", (
+        f"expected sweet-spot concept first; got order {picks_concepts}"
+    )
+
+
 def test_format_mix_prefers_novel_format_over_repeat():
     """Given two fresh concepts with different formats, the one whose
     format hasn't appeared in recent_formats wins.

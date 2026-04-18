@@ -446,7 +446,15 @@ def _quiz_loop_once(
     review.tick()
     _render_question_view(pick.question, state, session)
 
-    deadline = time.time() + 45.0
+    # Speed-based confidence inference. Butterfield & Metcalfe 2001
+    # showed that high-confidence misses benefit MOST from corrective
+    # feedback (the "hypercorrection" effect). We infer confidence
+    # from response time rather than asking (adds no UX friction):
+    #   < 5s  -> high confidence
+    #   5-15s -> medium
+    #   > 15s -> low (user was genuinely puzzled)
+    answer_started_at = time.time()
+    deadline = answer_started_at + 45.0
     label: str | None = None
     dismissal: str | None = None
     while time.time() < deadline and _is_thinking_with_grace():
@@ -507,7 +515,22 @@ def _quiz_loop_once(
             if pick.source != "review":
                 review.enqueue(pick.question)
             _set_pane_border("wrong")
+            answer_time = time.time() - answer_started_at
             sys.stdout.write(render_wrong_reveal(pick.question, chosen=label))
+            # Hypercorrection cue: a fast wrong answer = high-confidence
+            # miss, which research says is the STICKIEST kind of
+            # correction. Show a banner so the user notices it's worth
+            # remembering specifically.
+            if answer_time < 5.0:
+                sys.stdout.write(
+                    "\n  "
+                    + paint("\u25c9 sticky one", GOLD, BOLD)
+                    + paint(
+                        " - high-confidence miss; corrections here stick harder",
+                        ASH, DIM,
+                    )
+                    + "\n"
+                )
             sys.stdout.write("\n")
             sys.stdout.write(_render_footer(FOOTER_REVEAL_WRONG))
             sys.stdout.flush()

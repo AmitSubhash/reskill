@@ -119,6 +119,14 @@ def _bucketize(
 
     We look up state via the SEMANTIC concept label (Question.concept,
     how record_answer keys its SM-2 dict), not the pattern key.
+
+    Within each bucket, concepts are ordered by the 85% rule (Wilson
+    et al. 2019, Nature Communications): the user learns fastest when
+    ~15% of questions are errors. Concepts with accuracy too high
+    (already mastered) or too low (clearly too hard right now) are
+    deprioritized within their bucket toward concepts in the sweet
+    spot. Implemented as a stable sort by distance-from-15%-error,
+    so the algorithm still feels deterministic to the user.
     """
     overdue: list[str] = []
     new: list[str] = []
@@ -132,6 +140,18 @@ def _bucketize(
             overdue.append(key)
         else:
             not_due.append(key)
+
+    def _distance_from_sweet_spot(key: str) -> float:
+        label = _concept_label_for_key(key)
+        cs = state.concepts.get(label, {})
+        total = cs.get("total", 0)
+        if total < 2:
+            return 0.0  # not enough signal, keep neutral
+        error_rate = 1.0 - (cs.get("correct", 0) / max(1, total))
+        return abs(error_rate - 0.15)
+
+    overdue.sort(key=_distance_from_sweet_spot)
+    not_due.sort(key=_distance_from_sweet_spot)
     return overdue, new, not_due
 
 
@@ -146,21 +166,22 @@ def _pick_from_concepts(
     avoid_concept: str | None = None,
     recent_formats: list[str] | None = None,
 ) -> tuple[Question, str] | None:
-    """Pick a fresh question, preferring concept AND format diversity.
+    """Pick a fresh question from the caller-ordered pattern_keys.
 
-    Two-level preference:
-      1. Concept: avoid the concept just asked.
-      2. Format: among fresh questions, prefer one whose `.format`
-         differs from the last 2 served. MC monotony is the #1 complaint
-         in the learning-science literature (Roediger & Karpicke 2006
-         fluency illusion).
+    The caller (`_bucketize`) pre-orders concepts by sweet-spot
+    distance (Wilson 2019 85% rule). We preserve that order so
+    near-sweet-spot concepts come first. Within the resulting pool we:
+      1. Push `avoid_concept` to the end (interleave).
+      2. Pick the first key with fresh questions.
+      3. Among that concept's fresh questions, prefer formats not in
+         the last 2 served (Roediger & Karpicke 2006).
+      4. Break format-mix ties by random choice so individual
+         questions within a concept still rotate.
     """
     recent_set = set((recent_formats or [])[-2:])
-    shuffled = list(pattern_keys)
-    random.shuffle(shuffled)
     preferred: list[str] = []
     deprioritized: list[str] = []
-    for key in shuffled:
+    for key in pattern_keys:
         if avoid_concept and _concept_label_for_key(key) == avoid_concept:
             deprioritized.append(key)
         else:
@@ -170,7 +191,6 @@ def _pick_from_concepts(
         fresh = _fresh_questions(key, seen_ids)
         if not fresh:
             continue
-        # Prefer formats not in the recent window; shuffle within each.
         novel = [q for q in fresh if q.format not in recent_set]
         pool = novel or fresh
         q = random.choice(pool)
