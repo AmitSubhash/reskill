@@ -247,11 +247,8 @@ def wrap(argv: list[str], quizzes_enabled: bool = True) -> int:
         single string with newlines, so the region can draw them at absolute
         rows without cursor math.
         """
-        rendered = render_question(q, streak=st.streak)
-        # The render output includes newlines; split and drop the trailing
-        # empty line if any.
-        lines = rendered.split("\n")
-        # Append countdown line
+        rendered = render_question(q, streak=st.streak, compact=True)
+        lines = [line for line in rendered.split("\n") if line]
         lines.append(
             render_countdown_line(seconds_left, cfg.quiz_time_limit).replace(
                 "\r\x1b[2K", "").strip()

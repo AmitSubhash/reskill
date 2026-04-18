@@ -132,8 +132,12 @@ def _options(q: Question, inner: int, chosen: str | None = None) -> list[str]:
     return lines
 
 
-def render_question(q: Question, streak: int) -> str:
-    """Render the full question box. One atomic write (no re-renders)."""
+def render_question(q: Question, streak: int, compact: bool = False) -> str:
+    """Render the full question box.
+
+    compact=True: no blank lines between sections, streak folded into title.
+    Use for the wrap's region panel where every row counts.
+    """
     width = _box_width()
     inner = width - 4
     bar = HZ * (width - 2)
@@ -142,26 +146,43 @@ def render_question(q: Question, streak: int) -> str:
     ind = _indent()
 
     out: list[str] = []
-    out.append("")  # blank line of separation above
+    if not compact:
+        out.append("")
 
-    # Top with centered tight title
+    # Title (streak folded into right side if compact)
     title = " think about this "
     t_vis = len(title)
-    side_l = 2
-    side_r = width - 2 - side_l - t_vis
-    out.append(
-        ind
-        + paint(TL, border)
-        + paint(HZ * side_l, border)
-        + paint(title, accent, BOLD)
-        + paint(HZ * side_r, border)
-        + paint(TR, border)
-    )
+    if compact and streak > 0:
+        streak_tag = f" {streak}d "
+        side_l = 2
+        tag_len = len(streak_tag)
+        side_r = width - 2 - side_l - t_vis - tag_len
+        top = (
+            paint(TL, border)
+            + paint(HZ * side_l, border)
+            + paint(title, accent, BOLD)
+            + paint(HZ * max(0, side_r), border)
+            + paint(streak_tag, GOLD, DIM)
+            + paint(TR, border)
+        )
+    else:
+        side_l = 2
+        side_r = width - 2 - side_l - t_vis
+        top = (
+            paint(TL, border)
+            + paint(HZ * side_l, border)
+            + paint(title, accent, BOLD)
+            + paint(HZ * side_r, border)
+            + paint(TR, border)
+        )
+    out.append(ind + top)
 
-    # Streak chip (no divider; tight layout)
-    if streak > 0:
-        streak_line = paint(f"day {streak} streak", GOLD, DIM)
-        out.append(_row(streak_line, inner, border, accent))
+    # Streak chip (non-compact only)
+    if streak > 0 and not compact:
+        out.append(_row(paint(f"day {streak} streak", GOLD, DIM), inner, border, accent))
+        out.append(_empty(inner, border, accent))
+
+    if not compact:
         out.append(_empty(inner, border, accent))
 
     # Question
@@ -170,8 +191,12 @@ def render_question(q: Question, streak: int) -> str:
 
     # Code
     if q.code:
-        out.append(_empty(inner, border, accent))
-        for code_line in q.code.split("\n"):
+        if not compact:
+            out.append(_empty(inner, border, accent))
+        code_lines = q.code.split("\n")
+        if compact and len(code_lines) > 5:
+            code_lines = code_lines[:4] + ["..."]
+        for code_line in code_lines:
             out.append(_row(paint("  " + code_line[: inner - 3], TEAL), inner, border, accent))
 
     out.append(_empty(inner, border, accent))
@@ -180,9 +205,10 @@ def render_question(q: Question, streak: int) -> str:
     for line in _options(q, inner):
         out.append(_row(line, inner, border, accent))
 
-    out.append(_empty(inner, border, accent))
+    if not compact:
+        out.append(_empty(inner, border, accent))
 
-    # Key hints inside the box
+    # Key hints
     hints = (
         paint("press ", ASH, DIM)
         + paint("1 2 3 4", SAGE, BOLD)
@@ -197,9 +223,10 @@ def render_question(q: Question, streak: int) -> str:
 
     # Bottom
     out.append(ind + paint(BL + bar + BR, border))
-    out.append("")  # blank line below
+    if not compact:
+        out.append("")
 
-    return "\n".join(out) + "\n"
+    return "\n".join(out) + ("\n" if not compact else "")
 
 
 def render_countdown_line(seconds_left: float, total: float) -> str:

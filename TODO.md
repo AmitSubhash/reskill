@@ -16,8 +16,8 @@ Living todo list. Grows as work reveals new sub-tasks. Items marked:
 - [x] Tested against REAL Claude Code via tmux: quiz box renders CLEANLY
       in the bottom region, Claude's UI + response stream above.
       THE SCROLL REGION APPROACH WORKS. 🎉
-- [ ] Options 4 getting clipped when terminal is short (40 rows) --
-      need more compact render or smarter fallback
+- [x] Options 4 getting clipped when terminal is short (40 rows) --
+      fixed with compact mode + code truncation (inline_box.py)
 - [ ] Handle SIGWINCH (terminal resize) -- region needs recalculation
 - [ ] Handle edge: region too small for panel content (terminal < 30 lines)
 - [ ] Verify in iTerm2, Terminal.app (not just tmux), WezTerm
@@ -37,15 +37,17 @@ Living todo list. Grows as work reveals new sub-tasks. Items marked:
 
 The "quiz me on this week's commits" killer feature from research.
 
-- [ ] `reskill session` command entry point
-- [ ] `reskill session --from-commits 7d` flag
-- [ ] Git log parser: extract commits from N days with their diffs
-- [ ] Commit-to-question generator:
-  - [ ] Template-based for common patterns (new file, error handling,
-        typing changes, refactors)
-  - [ ] LLM-based for novel diffs (Haiku, pre-generated, cached)
+- [x] `reskill session` command entry point (cli.py: cmd_session)
+- [x] `reskill session --since 7d` flag (also --from-commits alias)
+- [x] Git log parser: extract commits from N days with their diffs
+      (reskill/git_diffs.py)
+- [x] Commit-to-question generator: template-based matching against
+      detect_concepts over commit subject + added lines
+- [x] Integrate with existing SM-2 state machinery (record_answer/skip)
+- [ ] LLM-based question gen for novel diffs (Haiku, pre-generated, cached)
 - [ ] Question cache at `~/.reskill/project_cache/<project_hash>/`
-- [ ] Integrate with existing SM-2 state machinery
+- [ ] Show the diff snippet that triggered the question (just commit
+      chip for now; deeper drill-in later)
 
 ## Phase C2: Stop hook integration
 

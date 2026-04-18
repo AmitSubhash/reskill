@@ -3,6 +3,7 @@
 Usage:
   reskill claude [args...]     wrap `claude` with inline quizzes (the real deal)
   reskill run <cmd> [args...]  wrap any command with inline quizzes
+  reskill session [--since 7d] quiz deck built from your recent commits
   reskill demo                 interactive demo (no Claude Code required)
   reskill stats                show streak, XP, concept mastery
   reskill pause                turn quizzes OFF globally
@@ -169,9 +170,34 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_resume()
     if cmd == "question":
         return cmd_question()
+    if cmd == "session":
+        return cmd_session(rest)
 
     print(f"reskill: unknown command '{cmd}'", file=sys.stderr)
     return cmd_help()
+
+
+def cmd_session(argv: list[str]) -> int:
+    """`reskill session --since 7d` -- quiz deck from recent commits."""
+    since = "7d"
+    max_questions = 5
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg in ("--since", "--from-commits") and i + 1 < len(argv):
+            since = argv[i + 1]
+            i += 2
+            continue
+        if arg in ("-n", "--max") and i + 1 < len(argv):
+            try:
+                max_questions = max(1, int(argv[i + 1]))
+            except ValueError:
+                pass
+            i += 2
+            continue
+        i += 1
+    from . import session as session_mod
+    return session_mod.run_session(since=since, max_questions=max_questions)
 
 
 if __name__ == "__main__":
