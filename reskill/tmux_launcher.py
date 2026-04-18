@@ -23,10 +23,9 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
-import sys
 import uuid
 
-from .palette import ASH, BOLD, DARK_ASH, DIM, SAGE, TEAL, paint
+from .palette import ASH, BOLD, DARK_ASH, DIM, TEAL, paint
 
 
 DEFAULT_PANEL_COLS = 52
@@ -79,9 +78,14 @@ def launch(claude_args: list[str]) -> int:
     panel_cols = _panel_cols_from_term()
 
     quoted_args = " ".join(_shell_quote(a) for a in claude_args)
-    claude_cmd = f"claude {quoted_args}".rstrip()
-
-    # Use -lc so the login shell finds reskill on PATH.
+    # Wrap claude so that when it exits, the whole tmux session tears down.
+    # Without this, the quiz pane keeps the session alive and the user
+    # is left staring at an orphaned quiz after finishing their Claude
+    # work -- the "return to terminal is super poor" complaint.
+    claude_cmd = (
+        f"claude {quoted_args}".rstrip()
+        + f"; tmux kill-session -t {session}"
+    )
     panel_cmd = "reskill quiz-panel"
 
     try:
@@ -94,12 +98,15 @@ def launch(claude_args: list[str]) -> int:
                 ],
                 check=True,
             )
-            # Claude runs in the current pane; replace this shell with it.
+            # Replace this shell with claude. When claude exits, tmux will
+            # close the pane; if our sibling is configured to die, it does.
             os.execvp("claude", ["claude", *claude_args])
 
-        # Fresh nested session path.
+        # Fresh nested session path. Use new-session with the claude command
+        # so the session auto-terminates when claude exits.
         subprocess.run(
-            ["tmux", "new-session", "-d", "-s", session, claude_cmd],
+            ["tmux", "new-session", "-d", "-s", session,
+             f"bash -c {_shell_quote(claude_cmd)}"],
             check=True,
         )
         subprocess.run(
@@ -109,11 +116,12 @@ def launch(claude_args: list[str]) -> int:
             ],
             check=True,
         )
+        # Pane 1 (quiz) should not prevent the session from closing when
+        # claude exits. The kill-session in claude_cmd handles it.
         subprocess.run(
             ["tmux", "select-pane", "-t", f"{session}:0.0"],
             check=True,
         )
-        # Attach; user exits by exiting claude.
         result = subprocess.run(["tmux", "attach", "-t", session])
         return result.returncode
     except subprocess.CalledProcessError as exc:
