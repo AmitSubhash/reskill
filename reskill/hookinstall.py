@@ -344,7 +344,7 @@ def install(with_statusline: bool = True, compose_statusline: bool = True) -> in
         print()
         print(
             paint("  shipped on PyPI as ", ASH, DIM)
-            + paint("reskill-claude", TEAL)
+            + paint("reskill-cli", TEAL)
             + paint(" (the CLI stays `reskill`)", ASH, DIM)
         )
     return 0

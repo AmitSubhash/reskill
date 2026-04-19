@@ -3,8 +3,8 @@ requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "reskill-claude"
-version = "0.2.1"
+name = "reskill-cli"
+version = "0.2.2"
 description = "A terminal companion for Claude Code. While Claude thinks for 23 seconds, reSkill hands you a quiz about the exact code it's working on."
 readme = "README.md"
 license = {text = "MIT"}

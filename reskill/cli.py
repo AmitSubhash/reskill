@@ -1,7 +1,7 @@
 """reskill -- learn during AI thinking time.
 
 Quickstart:
-  pip install reskill-claude
+  pip install reskill-cli
   reskill demo                 see it work (no settings touched)
   reskill install              wire into Claude Code (reversible)
   reskill claude               launch claude with a quiz pane alongside

@@ -30,8 +30,8 @@ Claude is thinking...                   reSkill   Q1
 ## Install
 
 ```bash
-# 1. install the package  (the PyPI name is reskill-claude; the CLI binary is `reskill`)
-pip install reskill-claude
+# 1. install the package  (the PyPI name is reskill-cli; the CLI binary is `reskill`)
+pip install reskill-cli
 
 # 2. see it work, no settings touched
 reskill demo

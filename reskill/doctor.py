@@ -82,7 +82,7 @@ def _check_reskill_installed() -> CheckResult:
         "reskill binary",
         "fail",
         "not on PATH",
-        "pip install reskill-claude",
+        "pip install reskill-cli",
     )
 
 
