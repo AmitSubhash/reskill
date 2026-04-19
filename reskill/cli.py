@@ -7,6 +7,7 @@ Usage:
   reskill next                 serve one context-matched quiz right now
   reskill review               drill your recently-missed questions
   reskill doctor               diagnose why reskill isn't behaving
+  reskill topics               see every concept + your mastery progress
   reskill install              install the Claude Code hooks (PreToolUse,
                                PostToolUse, Stop) that signal the quiz pane
   reskill uninstall            remove the hooks
@@ -197,6 +198,9 @@ def main(argv: list[str] | None = None) -> int:
     if cmd == "doctor":
         from . import doctor
         return doctor.run()
+    if cmd == "topics":
+        from . import topics_cmd
+        return topics_cmd.run()
     if cmd == "install":
         from . import hookinstall
         return hookinstall.install()
