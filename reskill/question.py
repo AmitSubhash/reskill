@@ -191,18 +191,20 @@ TEMPLATE_BANK: dict[str, list[Question]] = {
                 "    return 'ok'"
             ),
             opts=[
-                ("create_task is non-blocking -- the function returns before the tasks run, and tasks can be GC'd if no strong refs are held", True),
-                ("db.save must be awaited directly; create_task only works on sync callables", False),
-                ("The two tasks race on the same connection and one gets cancelled", False),
-                ("asyncio.create_task requires an explicit event loop argument outside of asyncio.run", False),
+                ("create_task holds only a weak ref, so the task can be GC'd before it completes", True),
+                ("db.save must be awaited directly; create_task requires a sync callable argument", False),
+                ("The two tasks race on the same connection and one of them gets cancelled early", False),
+                ("create_task needs an explicit event loop argument when called outside asyncio.run", False),
             ],
             explanation=(
                 "asyncio holds only a WEAK reference to tasks created via "
                 "create_task. If no strong reference is kept, the task can be "
-                "garbage-collected mid-flight -- and you see 'Task was destroyed "
-                "but it is pending!'. Either hold refs in a set (and discard on "
-                "done_callback), or use TaskGroup for structured lifetimes. "
-                "Python 3.11+ docs explicitly warn about this."
+                "garbage-collected mid-flight -- you see 'Task was destroyed "
+                "but it is pending!'. The function also returns before the "
+                "tasks run because create_task is non-blocking. Either hold "
+                "refs in a set (and discard on done_callback), or use "
+                "TaskGroup for structured lifetimes. Python 3.11+ docs "
+                "explicitly warn about this."
             ),
         ),
         _q(
@@ -286,22 +288,24 @@ TEMPLATE_BANK: dict[str, list[Question]] = {
             concept="http-status",
             format="scenario",
             prompt=(
-                "Your POST /users returns 201 on first call. The mobile client retries "
-                "(flaky network), and now you have duplicate users. What do you ship?"
+                "Your POST /users is idempotent-keyed and must return the SAME "
+                "resource body on retry. What's the status?"
             ),
             opts=[
-                ("Return 409 Conflict on retry so the client stops", False),
-                ("Make the endpoint accept an Idempotency-Key header; return the ORIGINAL 201 on replay", True),
-                ("Switch to 202 Accepted + polling so retries are safe", False),
-                ("Use 204 No Content -- the client doesn't need the body back", False),
+                ("201 Created with Idempotency-Key and the original response body echoed back", True),
+                ("200 OK because the resource already exists and the second call was a no-op", False),
+                ("409 Conflict to tell the client the resource is already there and stop retrying", False),
+                ("204 No Content because the client retried and doesn't need the body echoed back", False),
             ],
             explanation=(
-                "This is why Stripe/GitHub/AWS all adopt `Idempotency-Key`. The "
-                "server stores (key -> prior response) and on a repeat POST with "
-                "the same key returns the exact same 201 body. 409 is wrong "
-                "because the first call DID succeed -- the client has no way to "
-                "know that. 202 doesn't fix duplicates; it just moves the problem. "
-                "RFC 9110 and the IETF draft on HTTP idempotency cover the pattern."
+                "This is why Stripe/GitHub/AWS all adopt `Idempotency-Key`. "
+                "The server stores (key -> prior response) and on a repeat "
+                "POST with the same key returns the exact same 201 Created "
+                "body. 200 OK hides that this was a creation attempt; 409 is "
+                "wrong because the first call DID succeed and the client has "
+                "no way to know that; 204 throws away the body the client "
+                "specifically needs to re-read. RFC 9110 and the IETF draft "
+                "on HTTP idempotency cover the pattern."
             ),
         ),
     ],
@@ -477,27 +481,25 @@ TEMPLATE_BANK: dict[str, list[Question]] = {
             concept="mutable-default",
             format="bug",
             prompt=(
-                "A junior's PR avoids the mutable-default warning by using a tuple. "
-                "Integration tests still fail intermittently. Why?"
+                "Every log line in prod has the SAME timestamp -- the moment "
+                "the module was imported. What's the bug?"
             ),
             code=(
-                "def enqueue(item, log=(), ts=datetime.now()):\n"
-                "    log = (*log, (ts, item))\n"
-                "    return log"
+                "def log(msg, ts=datetime.now()):\n"
+                "    print(f'[{ts}] {msg}')"
             ),
             opts=[
-                ("The tuple is safe, but `ts=datetime.now()` is evaluated ONCE at def-time -- every call gets the import-time timestamp", True),
-                ("Tuples aren't actually immutable when they contain mutable elements like datetime", False),
-                ("`(*log, ...)` unpacks the tuple incorrectly; should be `log + (...,)`", False),
-                ("The flake is timezone-related -- datetime.now() returns naive datetimes", False),
+                ("ts is bound once at def-time, so every call reuses that single value", True),
+                ("datetime.now() is lazy; it needs .timestamp() called to actually evaluate", False),
+                ("You must write datetime.now().timestamp() to get a fresh value each call", False),
+                ("It works unless you pass timezone=; naive datetime shares a module cache", False),
             ],
             explanation=(
                 "The mutable-default rule is really the 'default evaluated at "
                 "def-time' rule. Any call expression in a default binds once: "
                 "`datetime.now()`, `uuid.uuid4()`, `socket.gethostname()` all "
                 "freeze at import. Idiom: `ts: datetime | None = None` and "
-                "`ts = ts or datetime.now()` inside the body. This bites people "
-                "who thought swapping `[]` for `()` was the whole fix."
+                "`ts = ts or datetime.now()` inside the body."
             ),
         ),
     ],
@@ -535,7 +537,7 @@ TEMPLATE_BANK: dict[str, list[Question]] = {
         _q(
             concept="identity",
             format="bug",
-            prompt="This passes locally, fails in CI. Python 3.12 started emitting SyntaxWarning. What's the line?",
+            prompt="Running this raises SyntaxWarning: 'is' with a literal. Why, and what's actually wrong?",
             code=(
                 "def describe(x):\n"
                 "    if x is 1:\n"
@@ -543,18 +545,18 @@ TEMPLATE_BANK: dict[str, list[Question]] = {
                 "    return 'other'"
             ),
             opts=[
-                ("`is 1` works by accident via the small-int cache; 3.12 added a SyntaxWarning because it's almost always a bug", True),
-                ("`is` requires a variable on the right; literals are rejected starting in 3.12", False),
-                ("The warning is about `return` outside a try/except block", False),
-                ("3.12 changed the small-int range; only ints in [-5, 0] are cached now", False),
+                ("is compares identity; CPython caches small ints but it's an impl detail, not a guarantee", True),
+                ("== would fail here too because int literals aren't equal to boxed ints in CPython 3.x", False),
+                ("This only works on PyPy; CPython never interned 1 and the comparison is always False", False),
+                ("It's a SyntaxError, not a Warning -- `is` with literals was removed from the grammar", False),
             ],
             explanation=(
-                "CPython caches small ints, so `x is 1` HAPPENED to work for "
-                "primitives. Python 3.8 added a SyntaxWarning for `is` with "
-                "literals, and linters (ruff F632) flag it. Same trap with `is "
-                "'hello'` -- works in the REPL because of string interning, fails "
-                "with larger strings or across process boundaries. Rule: `is` is "
-                "for None/True/False/sentinels ONLY."
+                "CPython caches small ints (typically -5..256) and interns some "
+                "strings, so `x is 1` HAPPENS to work -- but that's a CPython "
+                "implementation detail, not a language guarantee. Python 3.8+ "
+                "emits a SyntaxWarning for `is` with literals, and linters "
+                "(ruff F632) flag it. Rule: `is` is for None/True/False/"
+                "sentinels only; use `==` for value comparison."
             ),
         ),
     ],
@@ -691,23 +693,30 @@ TEMPLATE_BANK: dict[str, list[Question]] = {
         ),
         _q(
             concept="walrus",
-            format="idiom",
-            prompt="Most idiomatic way to filter a list and reuse the computed value?",
+            format="refactor",
+            prompt=(
+                "This file-parsing loop calls line.strip().lower() twice per TODO line. "
+                "Cleanest refactor that evaluates it once?"
+            ),
             code=(
-                "# goal: keep names whose lower-cased form starts with 'a'\n"
-                "# and avoid calling .lower() twice per item"
+                "for line in f:\n"
+                "    if line.strip().lower().startswith('todo'):\n"
+                "        process(line.strip().lower())"
             ),
             opts=[
-                ("[n for n in names if n.lower().startswith('a')]", False),
-                ("[low for n in names if (low := n.lower()).startswith('a')]", True),
-                ("[n.lower() for n in names if n.startswith('a')]  # different result", False),
-                ("list(filter(lambda n: n.lower().startswith('a'), names))", False),
+                ("Use :=, e.g. `if (s := line.strip().lower()).startswith('todo'): process(s)`", True),
+                ("Wrap line.strip().lower() in functools.lru_cache so repeat calls are free", False),
+                ("Rewrite as a generator: `(line.strip().lower() for line in f)` then filter", False),
+                ("Use itertools.groupby keyed on line.strip().lower() to dedupe the calls", False),
             ],
             explanation=(
-                "The walrus inside a comprehension lets you compute once and "
-                "reuse in both the filter and the value. Writing it without "
-                "`:=` either calls `.lower()` twice per element or changes the "
-                "semantics (pre-filtering on the raw string)."
+                "The walrus `:=` (PEP 572) assigns AND tests in one "
+                "expression, so you compute `line.strip().lower()` once, "
+                "bind it to `s`, and reuse `s` in the body. lru_cache keys "
+                "on the argument -- every iteration has a new `line`, so "
+                "nothing caches. A generator forces you to re-filter and "
+                "loses the ability to skip work. groupby solves a different "
+                "problem (runs of equal adjacent keys)."
             ),
         ),
     ],
@@ -738,22 +747,28 @@ TEMPLATE_BANK: dict[str, list[Question]] = {
         _q(
             concept="f-string",
             format="output",
-            prompt="What does this print?",
+            prompt=(
+                "This line raised SyntaxError on Python 3.11 but prints fine on 3.12. "
+                "What changed?"
+            ),
             code=(
-                "name = 'ada'\n"
-                "print(f'{name!r:>10}')"
+                "d = {'k': 'v'}\n"
+                "print(f\"{d['k']}\")"
             ),
             opts=[
-                ("       ada", False),
-                ("     'ada'", True),
-                ("'       ada'", False),
-                ("TypeError: conversion after format spec", False),
+                ("3.12 allows the same quote inside f-string expressions; 3.11 raised SyntaxError", True),
+                ("3.12 added automatic escaping of nested quotes inside f-string expressions", False),
+                ("3.11 could not subscript dicts inside f-strings; 3.12 added dict subscripting", False),
+                ("3.12 changed the tokenizer so bytes literals are permitted inside f-strings", False),
             ],
             explanation=(
-                "The `!r` conversion runs first (yielding the 5-char string "
-                "`'ada'`), then the format spec `>10` right-justifies that in "
-                "a width-10 field. Order in f-strings is always value -> "
-                "conversion (`!r`/`!s`/`!a`) -> format spec."
+                "Pre-3.12, f-strings were parsed by a hand-rolled mini-"
+                "tokenizer that forbade reusing the outer quote inside the "
+                "expression -- so `f\"{d['k']}\"` needed `f'{d[\"k\"]}'` or "
+                "escapes. PEP 701 made f-strings full expressions in the "
+                "grammar, so the same quote inside is fine. Nested quotes, "
+                "multi-line expressions, comments, and backslashes all now "
+                "work. Upgrades can quietly change which code parses."
             ),
         ),
     ],
@@ -1197,18 +1212,31 @@ TEMPLATE_BANK: dict[str, list[Question]] = {
     "pytest_parametrize": [
         _q(
             concept="testing-parametrize",
-            format="idiom",
-            prompt="Most idiomatic way to test the same logic over 4 inputs?",
+            format="refactor",
+            prompt=(
+                "The 2nd case fails and the report just says 'test_solve failed' "
+                "with no hint which input. First diagnostic improvement?"
+            ),
+            code=(
+                "def test_solve():\n"
+                "    cases = [(1, 1), (2, 3), (3, 6), (4, 10)]\n"
+                "    for n, expected in cases:\n"
+                "        assert solve(n) == expected"
+            ),
             opts=[
-                ("Four separate test functions", False),
-                ("@pytest.mark.parametrize('a,b,exp', [(1,2,3),...])", True),
-                ("for a,b,exp in cases: assert f(a,b)==exp", False),
-                ("subTest in a single test method", False),
+                ("@pytest.mark.parametrize so each case is a separate test with its own id and failure", True),
+                ("Split into four def test_solve_* functions, one per case, each with its own assert", False),
+                ("Replace the loop body with `assert all(solve(n) == e for n, e in cases)` for clarity", False),
+                ("Wrap each assert in try/except and print which (n, expected) raised before re-raising", False),
             ],
             explanation=(
-                "`parametrize` makes each case a separate reported test (own "
-                "name, own pass/fail). A for-loop stops at the first failure "
-                "and gives one combined report -- much harder to debug."
+                "`parametrize` makes each case a separate reported test with "
+                "its own name (`test_solve[2-3]`), its own pass/fail, and "
+                "first-class `-k` filtering. Splitting into four def "
+                "functions works but is verbose and drifts out of sync. "
+                "`assert all(...)` is strictly worse -- it hides which case "
+                "failed behind a single False. try/except noise obscures "
+                "pytest's built-in assertion rewriting."
             ),
         ),
         _q(
@@ -1417,17 +1445,20 @@ TEMPLATE_BANK: dict[str, list[Question]] = {
                 "df.rename(columns={'a':'A'}, inplace=True)"
             ),
             opts=[
-                ("It's faster but dangerous in multi-threaded code", False),
-                ("It doesn't save memory (still copies internally), breaks method chaining, and is slated for removal", True),
-                ("`inplace=True` is a typo -- the real kwarg is `in_place=True`", False),
-                ("It only works on columns with a unique index", False),
+                ("inplace returns None, so method chaining silently breaks", True),
+                ("inplace is faster and avoids an intermediate allocation", False),
+                ("inplace is deprecated and likely removed in pandas 3.0", False),
+                ("inplace doesn't work on views, only on fully owned frames", False),
             ],
             explanation=(
-                "The pandas team has deprecated most `inplace` paths: they "
-                "often allocate a new block internally anyway, they break "
-                "fluent chains (`df.fillna(0).drop_duplicates()`), and they "
-                "complicate Copy-on-Write (CoW) semantics in 2.x. Prefer "
-                "`df = df.fillna(0)` or a pipeline."
+                "The headline issue: `inplace=True` mutates and returns None, "
+                "so `df.fillna(0, inplace=True).drop_duplicates()` blows up "
+                "with 'NoneType has no attribute ...'. It ALSO doesn't save "
+                "memory (pandas often allocates a new block internally) and "
+                "the pandas team is actively discussing removing most inplace "
+                "paths in 3.0 because they complicate Copy-on-Write (CoW) "
+                "semantics. The chaining foot-gun is the one that bites "
+                "day-to-day. Prefer `df = df.fillna(0)` or a pipeline."
             ),
         ),
     ],
@@ -1538,20 +1569,50 @@ TEMPLATE_BANK: dict[str, list[Question]] = {
                 "    return hmac.compare_digest(sign(tok), expected)"
             ),
             opts=[
-                ("`tok not in TOKEN_INDEX` (dict membership) leaks timing differences between hit and miss, letting an attacker enumerate valid tokens", True),
-                ("`compare_digest` isn't constant-time for unequal-length inputs; pad to fixed length first", False),
-                ("`sign(tok)` must be called BEFORE the membership check for constant time", False),
-                ("Dict membership IS constant-time in Python; the leak is elsewhere", False),
+                ("dict membership leaks hit-vs-miss via timing, letting attackers enumerate valid tokens", True),
+                ("sign(tok) must be called BEFORE the membership check to keep the path constant-time", False),
+                ("HMAC key is hardcoded; rotating it per-request fixes the leak in compare_digest", False),
+                ("Dict membership IS constant-time in Python; the real leak is inside compare_digest", False),
             ],
             explanation=(
                 "Dict lookup is amortized O(1) but NOT constant-wallclock -- "
                 "hash collisions, resizing, and branch timing all vary between "
-                "hit and miss. The pattern leaks 'this token exists' vs 'this "
-                "token doesn't' via response time, letting attackers enumerate "
-                "valid prefixes. Fix: always do the full signing + compare_digest "
-                "path, returning False at the end regardless of lookup result. "
-                "compare_digest IS safe for unequal lengths -- that's one of its "
-                "features."
+                "hit and miss. The early `return False` on miss exits faster "
+                "than the full sign + compare_digest path on hit, leaking "
+                "'this token exists' vs 'this token doesn't' via response "
+                "time. Fix: always run the full signing + compare_digest "
+                "path, returning False at the end regardless of lookup "
+                "result. compare_digest IS safe for unequal lengths."
+            ),
+        ),
+        _q(
+            concept="security",
+            format="bug",
+            prompt=(
+                "Staging and prod share the same HMAC signing key loaded from "
+                "`os.environ['HMAC_SECRET']`. A staging exploit now forges prod "
+                "tokens. What's the actual fix?"
+            ),
+            code=(
+                "SECRET = os.environ['HMAC_SECRET']\n"
+                "def sign(tok: str) -> bytes:\n"
+                "    return hmac.new(SECRET.encode(), tok.encode(), 'sha256').digest()"
+            ),
+            opts=[
+                ("Use a distinct secret per environment so a staging leak can't verify in prod", True),
+                ("Hash the secret with sha256 before hmac.new so envs derive different keys", False),
+                ("Prepend the env name to the token so the signature is environment-scoped", False),
+                ("Rotate the shared secret hourly; staging exposure ages out before exploit", False),
+            ],
+            explanation=(
+                "HMAC's security rests on key secrecy. Reusing a key across "
+                "trust boundaries (staging <-> prod, dev <-> prod) means any "
+                "leak in the weaker environment forges tokens in the stronger "
+                "one. Hashing the key or prepending env names keeps the same "
+                "underlying secret, so compromise still transfers. Rotation "
+                "helps but doesn't solve the structural issue. Provision "
+                "per-environment secrets from your secret manager and never "
+                "copy prod secrets into staging."
             ),
         ),
     ],
@@ -1700,18 +1761,25 @@ TEMPLATE_BANK: dict[str, list[Question]] = {
         _q(
             concept="bash-xargs",
             format="bug",
-            prompt="`find . -name '*.py' | xargs grep TODO` mishandles a file named `my file.py`. Fix?",
+            prompt=(
+                "You want to grep thousands of files for TODO, NUL-safely AND "
+                "stream in batches (not one file per invocation). Which pipeline?"
+            ),
             opts=[
-                ("Quote the glob: `'*.py'` (already done; should still work)", False),
-                ("`find . -name '*.py' -print0 | xargs -0 grep TODO`", True),
-                ("Use `find -exec grep TODO {} +` -- xargs is deprecated", False),
-                ("Wrap in a subshell", False),
+                ("find . -name '*.py' -print0 | xargs -0 grep TODO   # NUL-safe, batched", True),
+                ("find . -name '*.py' | xargs grep TODO   # simplest pipeline, whitespace safe", False),
+                ("find . -name '*.py' -exec grep TODO {} \\;   # per-file exec, no xargs needed", False),
+                ("find . -name '*.py' -print | xargs -I{} grep TODO {}   # -I handles spaces", False),
             ],
             explanation=(
-                "xargs splits on whitespace by default, so `my file.py` "
-                "becomes two args. `-print0` separates with NUL bytes; `-0` "
-                "tells xargs to use them. `-exec ... +` is also fine and "
-                "avoids xargs entirely."
+                "`-print0` separates paths with NUL (which cannot appear in "
+                "a filename) and `xargs -0` consumes NUL-delimited input, so "
+                "spaces/newlines in names are safe. xargs also batches "
+                "arguments into as few grep invocations as ARG_MAX allows, "
+                "so you stream thousands of files efficiently. `-exec ... "
+                "\\;` is NUL-safe but spawns one grep per file -- not "
+                "batched. `-I{}` forces one invocation per item too, and "
+                "plain `xargs` without `-0` still splits on whitespace."
             ),
         ),
     ],
