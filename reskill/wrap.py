@@ -1,21 +1,14 @@
 """PTY wrapper that runs a child process (claude) with inline quizzes.
 
-Design choices that survived iteration:
+Design choices:
 
-  1. The quiz is inline in the same terminal (no alt-screen switching --
-     that was jarring and left artifacts on exit).
-  2. When a quiz appears we CLEAR THE VISIBLE SCREEN (ESC [2J H) and
-     render the quiz on a clean canvas. Scrollback is preserved, so the
-     user can scroll up to see Claude's earlier output.
-  3. While the quiz is on screen we HOLD Claude's new bytes in a buffer
-     instead of forwarding them -- otherwise Ink repaints scramble the
-     quiz. When the quiz ends, we discard the buffer; Ink repaints cleanly
-     on its next frame.
-  4. If the answer is CORRECT, we show a brief one-line flash and move on
-     (no reveal). If the answer is WRONG or SKIPPED, we show the full
-     teaching reveal with the explanation.
-  5. A countdown bar at the bottom of the quiz ticks down; if it expires
-     the quiz auto-skips.
+  1. The quiz is inline in the same terminal via a DECSTBM pinned region
+     (no alt-screen switching -- that was jarring and left artifacts).
+  2. Claude's bytes flow through to the main region while the quiz is
+     visible; Ink writes above, the quiz panel owns the bottom rows.
+  3. If the answer is CORRECT, we show a brief one-line flash and move on
+     (no reveal). If WRONG or SKIPPED, we show the full teaching reveal.
+  4. A countdown bar ticks down; if it expires the quiz auto-skips.
 """
 
 from __future__ import annotations
@@ -250,7 +243,6 @@ def wrap(argv: list[str], quizzes_enabled: bool = True) -> int:
     prompt_submitted_at: float = 0
     last_quiz_at: float = 0.0
     suppress_until: float = 0.0
-    held_output = bytearray()
     exit_status = 0
 
     def stdout_write(b: bytes) -> None:
@@ -398,12 +390,6 @@ def wrap(argv: list[str], quizzes_enabled: bool = True) -> int:
                 reveal = render_wrong_reveal(q, chosen=None).encode()
                 stdout_write(reveal)
                 time.sleep(cfg.wrong_reveal_ms / 1000.0)
-
-        # Flush or discard held bytes depending on what happened
-        if skip_reason in ("permission", "turn_end"):
-            if held_output:
-                stdout_write(bytes(held_output))
-        held_output.clear()
 
         # Reset Ink once more: its next render won't try to reach up into
         # the quiz/reveal we just drew.
