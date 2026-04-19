@@ -28,8 +28,9 @@ TRANSCRIPTS_ROOT = Path.home() / ".claude" / "projects"
 
 # Claude Code appends on every token. If a transcript mtime is this recent,
 # we treat Claude as active. Wide enough to cover brief pauses between
-# tool calls; tight enough to go idle within a few seconds of Stop.
-TRANSCRIPT_FRESH_SECONDS = 3.0
+# tool calls AND long model-inference gaps between tool calls (which
+# can be 15-30s on xhigh effort), tight enough to go idle soon after Stop.
+TRANSCRIPT_FRESH_SECONDS = 15.0
 
 
 def _flag_is_set() -> bool:
@@ -206,7 +207,11 @@ def recent_transcript_text(cwd: str | None = None, max_chars: int = 8000) -> str
 
 
 def have_reskill_hooks() -> bool:
-    """Report whether `reskill install` has been run (best-effort check)."""
+    """Report whether `reskill install` has been run (best-effort check).
+
+    Claude Code reads hooks from settings.hooks.* (nested). We also
+    check the settings root for legacy installs.
+    """
     import json
 
     settings = Path.home() / ".claude" / "settings.json"
@@ -216,9 +221,17 @@ def have_reskill_hooks() -> bool:
         data = json.loads(settings.read_text())
     except (json.JSONDecodeError, OSError):
         return False
-    for event in ("Stop", "PreToolUse", "PostToolUse", "UserPromptSubmit"):
-        for entry in data.get(event, []):
-            for hook in entry.get("hooks", []):
-                if "reskill" in hook.get("command", ""):
-                    return True
+    events = ("Stop", "PreToolUse", "PostToolUse", "UserPromptSubmit")
+    locations = []
+    hooks = data.get("hooks")
+    if isinstance(hooks, dict):
+        locations.append(hooks)
+    locations.append(data)  # legacy root-level
+    for loc in locations:
+        for event in events:
+            for entry in loc.get(event, []) if isinstance(loc.get(event), list) else []:
+                for hook in entry.get("hooks", []):
+                    cmd = hook.get("command", "")
+                    if "reskill" in cmd or "reskill-thinking-flag" in cmd:
+                        return True
     return False
