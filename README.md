@@ -2,6 +2,7 @@
 
 ![reSkill, while Claude thinks you learn](./marketing/banner/banner.gif)
 
+[![PyPI](https://img.shields.io/pypi/v/reskill-cli.svg?label=pypi%20%7C%20reskill-cli)](https://pypi.org/project/reskill-cli/)
 [![tests](https://github.com/AmitSubhash/reskill/actions/workflows/tests.yml/badge.svg)](https://github.com/AmitSubhash/reskill/actions/workflows/tests.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
@@ -10,8 +11,8 @@
 > seconds, reSkill hands you a quiz about the exact code it's working
 > on.
 
-Zero network. No Claude slowdown. Local state, single flag file. MIT,
-alpha. Landing: <https://amitsubhash.github.io/reskill/>.
+Zero network. No Claude slowdown. Local state, single flag file. MIT.
+Landing: <https://amitsubhash.github.io/reskill/>.
 
 ```
 Claude is thinking...                   reSkill   Q1
@@ -30,19 +31,14 @@ Claude is thinking...                   reSkill   Q1
 ## Install
 
 ```bash
-# 1. install the package  (the PyPI name is reskill-cli; the CLI binary is `reskill`)
-pip install reskill-cli
+pip install reskill-cli       # the PyPI dist name. The CLI binary is `reskill`.
 
-# 2. see it work, no settings touched
-reskill demo
-
-# 3. wire it into Claude Code (reversible; backs up your settings.json)
-reskill install
-reskill doctor
+reskill demo                  # try it end-to-end; no settings touched
+reskill install               # wire into Claude Code (reversible; backs up settings.json)
+reskill doctor                # confirm everything is wired up
 ```
 
-Prefer editable? `git clone https://github.com/AmitSubhash/reskill.git && cd reskill && pip install -e .`
-Or install straight from GitHub: `pip install git+https://github.com/AmitSubhash/reskill.git`.
+From source: `git clone https://github.com/AmitSubhash/reskill.git && cd reskill && pip install -e .`
 
 ## Use
 
@@ -123,7 +119,7 @@ export RESKILL_SAME_CONCEPT_COOLDOWN=90
 
 ## What's inside
 
-- 74 hand-written questions across 50 concepts
+- 85 hand-written questions across 60 concepts
 - Python (async, typing, numpy / pandas / torch, stdlib gotchas,
   packaging, testing) plus shell, git, SQL, React and TypeScript
   essentials
@@ -143,9 +139,12 @@ only touch entries we own.
 
 ## Status
 
-Alpha. Data model stable, scheduler is evidence-based. The template
-bank is hand-written; LLM-generated questions from novel diffs are
-the next major milestone.
+v0.2.x on PyPI. Data model stable, scheduler evidence-based, template
+bank hand-written and length-equalized, LLM-generated questions from
+live transcripts + commit diffs via `reskill gen --live`. Tests cover
+persistence, pacing, validator rules, session flow, and scheduler
+tiering. Roadmap: broader concept coverage for non-Python surfaces
+and per-project question caches.
 
 ## License
 
