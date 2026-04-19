@@ -32,6 +32,7 @@ from . import scheduler
 from . import state as state_mod
 from .review_queue import ReviewQueue
 from .activity import have_reskill_hooks, is_claude_active, recent_transcript_text
+from .llm_gen import Prefetcher, wrap_code_for_prompt
 from .git_diffs import fetch_commits, project_root
 from .inline_box import (
     render_correct_flash,
@@ -440,6 +441,7 @@ def _quiz_loop_once(
     review: ReviewQueue,
     last_concept: str | None,
     recent_formats: list[str],
+    prefetch: Prefetcher | None = None,
 ) -> str | None:
     """Serve one question (if pacing allows). Returns the concept served
     so the next call can interleave away from it."""
@@ -457,24 +459,51 @@ def _quiz_loop_once(
             source="review",
         )
     else:
-        live_text = recent_transcript_text(cwd=os.getcwd() or project)
-        commit_text = ""
-        if project:
-            commits = fetch_commits("7d", cwd=project, limit=10)
-            commit_text = "\n".join(
-                c.subject + "\n" + "\n".join(c.added_lines[:60]) for c in commits
-            )
-        pick = scheduler.choose(
-            live_text=live_text,
-            commit_text=commit_text,
-            state=state,
-            seen_ids=seen,
-            last_concept=last_concept,
-            recent_formats=recent_formats,
-        )
+        # Check for a pre-fetched LLM-gen question first -- it's usually
+        # more contextually relevant than a template match. Only serve
+        # it if the user has already seen a few template questions this
+        # session (cold-start should be fast via templates).
+        pick = None
+        if (
+            prefetch is not None
+            and session.served >= 2
+            and session.served % 3 == 2
+        ):
+            gen_result = prefetch.take(timeout=0.0)
+            if gen_result is not None and gen_result.question is not None:
+                pick = scheduler.Pick(
+                    question=gen_result.question,
+                    concept=gen_result.question.concept,
+                    source="llm",
+                )
+
         if pick is None:
-            _render_take_a_breath()
-            return last_concept
+            live_text = recent_transcript_text(cwd=os.getcwd() or project)
+            commit_text = ""
+            if project:
+                commits = fetch_commits("7d", cwd=project, limit=10)
+                commit_text = "\n".join(
+                    c.subject + "\n" + "\n".join(c.added_lines[:60])
+                    for c in commits
+                )
+            pick = scheduler.choose(
+                live_text=live_text,
+                commit_text=commit_text,
+                state=state,
+                seen_ids=seen,
+                last_concept=last_concept,
+                recent_formats=recent_formats,
+            )
+            # Kick off background prefetch for NEXT question while the
+            # user is about to answer THIS one. Skip if circuit open.
+            if prefetch is not None and live_text:
+                prefetch.request(
+                    code=wrap_code_for_prompt(live_text),
+                    context="live transcript tail",
+                )
+            if pick is None:
+                _render_take_a_breath()
+                return last_concept
 
     # Pacing gate (review items still obey the rate limit).
     gate = pacing.can_fire_now(paced, candidate_concept=pick.concept)
@@ -685,6 +714,7 @@ def run() -> int:
     session = SessionCounters()
     paced = pacing.load()
     review = ReviewQueue()
+    prefetch = Prefetcher()
 
     saved_tty = None
     if sys.stdin.isatty():
@@ -709,6 +739,7 @@ def run() -> int:
                 last_concept = _quiz_loop_once(
                     state, session, paced, review,
                     last_concept, recent_formats,
+                    prefetch=prefetch,
                 )
             else:
                 if last_render != "idle":
@@ -723,6 +754,7 @@ def run() -> int:
     except KeyboardInterrupt:
         return 0
     finally:
+        prefetch.shutdown()
         # Restore tmux pane border to the default color so the user
         # doesn't see a weird color on whatever pane replaces this one.
         if os.environ.get("TMUX"):
