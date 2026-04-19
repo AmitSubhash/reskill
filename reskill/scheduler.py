@@ -76,14 +76,27 @@ CONFUSABLE_CLUSTERS: dict[str, set[str]] = {
         "torch_detach", "matplotlib_close",
     },
     "testing": {"pytest_fixture", "pytest_parametrize", "mock_patch_target"},
-    "sql": {"n_plus_one", "sql_null_semantics", "window_function"},
+    "sql": {
+        "n_plus_one", "sql_null_semantics", "window_function",
+        "sql_functional_index", "explain_analyze_nested_loop",
+    },
     "frontend": {
         "useeffect_deps", "react_keys", "ts_unknown_vs_any", "eq_eq_eq",
     },
-    "shell-and-git": {"rebase_vs_merge", "set_pipefail", "find_xargs"},
-    "web-patterns": {"http_status_created", "retry_jitter", "depends"},
+    "shell-and-git": {
+        "rebase_vs_merge", "set_pipefail", "find_xargs",
+        "git_reset_hard_vs_revert", "git_bisect_flake",
+        "shell_ifs_filename_spaces", "shell_at_vs_star_forwarding",
+    },
+    "web-patterns": {
+        "http_status_created", "retry_jitter", "depends",
+        "cache_control_user_data", "cors_wildcard_credentials",
+    },
     "python-error-handling": {"try_except", "context_manager_with"},
     "caching": {"lru_cache"},
+    "ops": {
+        "docker_layer_cache_copy_order", "pg_pool_exhaustion_pgbouncer",
+    },
 }
 
 

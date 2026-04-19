@@ -2406,6 +2406,27 @@ PATTERNS: list[tuple[str, str, re.Pattern[str]]] = [
     ("cloze_counter", "Counter",
      re.compile(r"\bCounter\(|collections\.Counter", re.I)),
 
+    # ── new coverage: git / shell / SQL / HTTP / ops ────────────
+    ("git_reset_hard_vs_revert", "git reset vs revert",
+     re.compile(r"\bgit\s+(reset|revert)\b|force[-\s]?push|--force-with-lease", re.I)),
+    ("git_bisect_flake", "git bisect with flakes",
+     re.compile(r"\bgit\s+bisect\b|\bflaky\b.*\btest\b|\bbisect\s+skip\b", re.I)),
+    ("sql_functional_index", "SQL functional index",
+     re.compile(r"CREATE\s+INDEX\s+\w+\s+ON\s+\w+\s*\(LOWER\(|WHERE\s+LOWER\s*\(|functional\s+index", re.I)),
+    ("explain_analyze_nested_loop", "EXPLAIN ANALYZE",
+     re.compile(r"EXPLAIN\s+ANALYZE\b|Nested\s+Loop\b|Hash\s+Join\b|work_mem\b", re.I)),
+    ("cache_control_user_data", "Cache-Control headers",
+     re.compile(r"Cache-Control\s*:|\bno-store\b|\bno-cache\b|private,\s*max-age", re.I)),
+    ("cors_wildcard_credentials", "CORS with credentials",
+     re.compile(r"Access-Control-Allow-Origin\s*:\s*\*|credentials\s*:\s*['\"]?include['\"]?", re.I)),
+    ("shell_ifs_filename_spaces", "shell IFS filename gotcha",
+     re.compile(r"\$\(ls\s|for\s+\w+\s+in\s+\$\(ls\b|IFS\s*=|while\s+IFS=", re.I)),
+    ("shell_at_vs_star_forwarding", "shell $@ vs $*",
+     re.compile(r'"\$@"|"\$\*"|\$@\s|\$\*\s', re.I)),
+    ("docker_layer_cache_copy_order", "Docker layer cache",
+     re.compile(r"^COPY\s+\.\s+\.\s*$|^COPY\s+requirements|pip\s+install\s+-r\s+requirements", re.I | re.M)),
+    ("pg_pool_exhaustion_pgbouncer", "Postgres connection pooling",
+     re.compile(r"\bpgbouncer\b|QueuePool\s+limit|max_connections\b|transaction\s+mode", re.I)),
 ]
 
 
