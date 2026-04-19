@@ -1,7 +1,17 @@
 # reSkill
 
+[![tests](https://github.com/AmitSubhash/reskill/actions/workflows/tests.yml/badge.svg)](https://github.com/AmitSubhash/reskill/actions/workflows/tests.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
+
 > Quizzes that appear while Claude Code is thinking. Turn waiting time
 > into learning time.
+
+**30-second demo:**
+[marketing/videos/reskill-launch.mp4](./marketing/videos/reskill-launch.mp4)
+(landscape) &nbsp;·&nbsp;
+[marketing/videos/reskill-tiktok.mp4](./marketing/videos/reskill-tiktok.mp4)
+(vertical)
 
 ```
 Claude is thinking...                   reSkill   Q1
