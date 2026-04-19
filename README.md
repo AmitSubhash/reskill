@@ -1,156 +1,139 @@
 # reSkill
 
-Turn AI thinking time into developer growth. Interactive quizzes that
-run in a **tmux pane alongside Claude Code**, a live badge in Claude
-Code's statusline, and a commit-driven post-session deck for deliberate
-practice.
+> Quizzes that appear while Claude Code is thinking. Turn waiting time
+> into learning time.
 
-## Why not just overlay on top of Claude Code?
+```
+Claude is thinking...                   reSkill   Q1
+                                        ╭── think about this ──╮
+  · Reading 3 files                     │ Most Pythonic way to │
+  · Analyzing scheduler.py              │ read a UTF-8 JSON?   │
+                                        │                      │
+  Actioning... 16s                      │  1) open(...)        │
+                                        │  2) Path(...).read_  │
+                                        │     text(utf-8)  ✓   │
+                                        │  3) codecs.open()    │
+                                        │  4) io.open()        │
+                                        ╰──────────────────────╯
+```
 
-Tried it. Doesn't work. Claude Code uses Ink (React), which repaints
-via relative cursor moves and periodic full-screen clears -- it always
-thinks it owns the entire terminal. Our earlier PTY-wrap + DECSTBM
-scroll-region approach looked fine in synthetic tests and collapsed in
-real use (borders scattered, quizzes firing on response bullets,
-panel overwritten by Ink repaints).
-
-The architecture that actually works:
-
-  * **tmux split-pane** for the interactive quiz -- Claude gets one
-    pane, reSkill gets the other. Two independent PTYs, zero
-    escape-sequence collision.
-  * **Claude Code statusLine** for ambient display -- Ink itself
-    reserves the row, debounces, and hides during permission prompts.
-    Not interactive, but always visible.
-  * **`reskill session`** for post-run deliberate practice on the
-    commits you just shipped.
+While Claude thinks, you answer. When Claude finishes, you've learned
+something you didn't want to Google. Over time the scheduler tracks
+what you miss and drills it again. Streaks are loss-averse-free — miss
+a day, come back, pick up where you left off.
 
 ## Install
 
 ```bash
-cd ~/Projects/reskill
-pip install -e .
-brew install tmux           # only for `reskill claude` -- everything else works without it
-reskill install             # adds hooks + statusLine to ~/.claude/settings.json
+pip install -e ~/Projects/reskill
+reskill install     # adds Claude Code hooks + statusline (reversible)
+reskill doctor      # confirms everything is wired up
 ```
 
-## Do I need tmux?
+## Use
 
-Only for `reskill claude` (the interactive live-wrap with a quiz pane
-alongside Claude). Without tmux you still get:
+**Live during Claude sessions** (the main one):
 
-- `reskill next` — single question any time, from any terminal
-- `reskill session` — post-session deliberate-practice deck
-- `reskill statusline` — passive progress readout at the bottom of
-  Claude Code's own UI (installed automatically by `reskill install`)
-- `reskill status` / `reskill streak` / `reskill stats` — CLI views
+```bash
+reskill claude   # opens claude + a quiz pane alongside
+```
 
-If your existing `statusLine` command already shows useful info,
-`reskill install` writes a wrapper that runs BOTH — yours on line 1,
-reskill's on line 2. Uninstall restores the original.
+If you have tmux: splits the current window. If not: pops a second
+Terminal.app / iTerm2 window. Click the quiz pane (or `Ctrl+B →`) to
+focus it, press `1`-`4` to answer.
+
+**Anytime, anywhere:**
+
+```bash
+reskill next          # one context-matched quiz, right now
+reskill session       # commit-driven deck (last 7 days)
+reskill review        # drill your recently-missed questions
+reskill doctor        # diagnose anything that feels off
+reskill status        # one-liner: 0 mastered · 3/5 today · 🔥 5
+reskill stats         # level, XP, per-concept mastery
+reskill streak        # 12-week github-style heatmap
+```
+
+## How it works
+
+- **Hooks** fire on `UserPromptSubmit` / `PreToolUse` / `PostToolUse`
+  to toggle a flag file at `~/.reskill/state/thinking`.
+- **Quiz pane** watches the flag (or falls back to transcript-mtime
+  polling if hooks aren't installed) and serves a question whenever
+  Claude is mid-thought.
+- **Scheduler** picks questions matched to what Claude is writing.
+  Tiers: live transcript > recent git commits > cumulative cache.
+  Within a tier: SM-2 overdue > new > not-due. Across concepts:
+  interleaved within confusable clusters (Rohrer & Taylor 2007).
+  Within a concept: format diversity (Roediger & Karpicke 2006).
+  Targets 15% error rate per Wilson 2019.
+- **Pacing gate** rate-limits: 10s min gap, 20/hr, 60/day. All
+  `RESKILL_*` env-var tunable.
+- **In-session re-queue** pushes wrong answers back 3 items later
+  (Butler & Roediger 2008).
+- **Hypercorrection cue** — wrong answers given in <5s get a "◉
+  sticky one" banner; research says these stick hardest.
+
+## Controls in every quiz
+
+| Key      | Action                                    |
+|----------|-------------------------------------------|
+| `1`-`4`  | Answer                                    |
+| `x`/esc  | Skip this question                        |
+| `b`      | Later — requeue after 5 items             |
+| `B`      | Bury — gone for today                     |
+| `q`      | Quit the pane                             |
+
+## Themes
+
+```bash
+export RESKILL_THEME=everforest  # default
+export RESKILL_THEME=mono        # BOLD/DIM only, works on any background
+export NO_COLOR=1                # standard -- also forces mono
+```
 
 ## Tuning
 
-Pace and color behavior are env-var tunable:
-
 ```bash
-export RESKILL_MIN_GAP=30          # seconds between quizzes (default 30)
-export RESKILL_MAX_PER_HOUR=10     # cap / hour (default 10)
-export RESKILL_MAX_PER_DAY=40      # cap / day (default 40)
-export RESKILL_THINKING_DEBOUNCE=3 # skip first N seconds of thinking
-export RESKILL_THEME=mono          # force no-color (BOLD/DIM only)
-export NO_COLOR=1                  # standard: also forces mono mode
+export RESKILL_MIN_GAP=10                # seconds between quizzes
+export RESKILL_MAX_PER_HOUR=20
+export RESKILL_MAX_PER_DAY=60
+export RESKILL_THINKING_DEBOUNCE=3       # skip first N seconds
+export RESKILL_SAME_CONCEPT_COOLDOWN=90
 ```
 
-## The three ways to use it
+## What's inside
 
-### 1. `reskill claude` -- tmux split-pane launcher
+- 54 hand-written questions across 50 concepts
+- Python (async, typing, numpy/pandas/torch, stdlib gotchas,
+  packaging, testing) + shell, git, SQL, React/TS essentials
+- 8 question formats: output, bug, tradeoff, scenario, why, gotcha,
+  refactor, cloze
 
-```bash
-reskill claude                      # claude in main pane, quiz in side pane
-reskill claude --continue
-reskill claude /plan "..."
-```
-
-Claude runs in the left pane exactly as normal. A `reskill quiz-panel`
-runs in the right pane and watches a file signal (`~/.reskill/state/
-thinking`) written by the Claude Code hooks we installed. When Claude
-is mid-thought, a question appears. You answer with 1/2/3/4, `x`
-skips, `q` exits the pane.
-
-### 2. `reskill session` -- git-log deliberate practice
+## Uninstall
 
 ```bash
-reskill session                  # last 7 days, 5 questions
-reskill session --since 14d
-reskill session --since 24h --max 3
+reskill uninstall   # removes hooks + statusline, keeps a backup
 ```
 
-Parses `git log` in the current repo, matches each commit's diff
-against the concept patterns, and walks you through a deck stocked
-with your own recent work. Each quiz shows a "from <sha> <subject>"
-chip so you know which commit triggered the question.
-
-### 3. statusLine badge (always on)
-
-Once `reskill install` has run, Claude Code calls
-`reskill statusline` every 2 seconds. You'll see:
-
-- idle: `reskill · day 3 · 2/5 today · 470 xp`
-- during a turn: `reskill  quiz pane is live / 🔥 3  ·  2/5 today  ·  quiz this turn`
-
-## Status + streak
-
-```bash
-reskill status            # terse one-liner: "🔥 12  ·  3/5 today"
-reskill status --plain    # ASCII, safe for $PS1 / tmux status-right
-reskill streak            # 12-week github-style heatmap
-reskill stats             # level, XP, best combo, per-concept mastery
-```
-
-Drop this in your `~/.zshrc`:
-
-```bash
-PROMPT='$(reskill status --plain) %# '
-```
-
-## Controls in the quiz pane
-
-| Key     | Action                       |
-|---------|------------------------------|
-| `1`-`4` | Answer the current quiz      |
-| `x`     | Skip this quiz               |
-| `esc`   | Alias for `x`                |
-| `q`     | Quit the quiz pane           |
-
-Your answer cannot leak to Claude -- the panes are isolated PTYs.
-
-## How the hooks wire up
-
-`reskill install` edits `~/.claude/settings.json` (with a backup) to add:
-
-- `UserPromptSubmit` + `PreToolUse` -- touch `~/.reskill/state/thinking`
-- `PostToolUse` + `Stop` -- remove that file
-- `Stop` -- also call `reskill log-session` to ingest the transcript
-  into the per-project concept cache at `~/.reskill/project_cache/`
-- `statusLine` -- point at `reskill statusline` with a 2s refresh
-
-`reskill uninstall` removes only those entries; your existing hooks
-are untouched.
-
-## What's in the box (data)
-
-- `~/.reskill/state.json` -- streak, XP, per-concept mastery (SM-2)
-- `~/.reskill/project_cache/<hash>/concepts.json` -- per-project
-  concept tally from ingested session transcripts; used by
-  `reskill session` and `reskill quiz-panel` to prioritize concepts
-  you've actually touched
-- `~/.reskill/state/thinking` -- flag file, presence means "Claude is
-  mid-thought right now"
+Your existing `settings.json` hooks and statusLine are preserved — we
+only touch entries we own.
 
 ## Status
 
-Alpha. Template bank covers async, error handling, caching, JWT,
-databases, HTTP status codes, generators, context managers,
-comprehensions, FastAPI DI, and pytest. LLM-generated questions for
-novel diffs are next.
+Alpha. Data model stable, scheduler is evidence-based. The template
+bank is hand-written; LLM-generated questions from novel diffs are
+the next major milestone.
+
+## License
+
+MIT. See LICENSE.
+
+## Credits
+
+Built by Amit Subhash ([@AmitSubhash](https://github.com/AmitSubhash)).
+Scheduler grounded in the spaced-repetition literature: Bjork & Bjork
+2011 (desirable difficulties), Rohrer & Taylor 2007 (interleaving),
+Butler & Roediger 2008 (delayed feedback), Wilson et al. 2019 (85%
+rule), Butterfield & Metcalfe 2001 (hypercorrection). Mistakes are
+mine.
