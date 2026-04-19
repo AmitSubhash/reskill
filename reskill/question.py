@@ -711,6 +711,7 @@ TEMPLATE_BANK: dict[str, list[Question]] = {
             ),
         ),
     ],
+    "f_string_debug": [
         _q(
             concept="f-string",
             format="output",
@@ -759,18 +760,26 @@ TEMPLATE_BANK: dict[str, list[Question]] = {
     "dict_order": [
         _q(
             concept="dict",
-            format="why",
-            prompt="Why can experienced devs now rely on dict iteration order?",
+            format="scenario",
+            prompt=(
+                "You implement a request-rate-limited LRU cache manually with a dict "
+                "since Python 3.7 guarantees insertion order. Which is the best way "
+                "to move an existing key to the MRU position on hit?"
+            ),
             opts=[
-                ("PEP 468 made kwargs ordered, dicts are still arbitrary", False),
-                ("CPython 3.6 made it an impl detail; 3.7 promoted it to language spec", True),
-                ("Only OrderedDict guarantees it; dict does not", False),
-                ("Sorted by hash, which is stable across runs", False),
+                ("`d[k] = d[k]` -- re-assigning an existing key keeps its original position (no-op)", False),
+                ("`d[k] = d.pop(k)` -- removes then re-inserts, putting it at the end", True),
+                ("`OrderedDict(d).move_to_end(k)` -- only OrderedDict supports reorder", False),
+                ("`sorted(d.items(), key=lambda kv: kv[0] == k)` -- O(n log n) but portable", False),
             ],
             explanation=(
-                "Insertion-order is GUARANTEED since Python 3.7. OrderedDict "
-                "still has uses (move_to_end, equality is order-sensitive) but "
-                "for plain ordering, dict is enough now."
+                "Subtle: re-assigning an EXISTING key preserves its original "
+                "insertion slot -- that's a documented language guarantee, not a "
+                "bug. `pop` + re-insert is the idiom for 'touch'. This is exactly "
+                "why `OrderedDict.move_to_end` still exists: it's O(1) and "
+                "doesn't rebucket. For hot paths, use it; for cold paths, the "
+                "pop-reinsert trick is fine. Knowing this distinction separates "
+                "'uses dict order' from 'understands dict order'."
             ),
         ),
         _q(
@@ -800,19 +809,25 @@ TEMPLATE_BANK: dict[str, list[Question]] = {
     "pathlib_path": [
         _q(
             concept="pathlib",
-            format="idiom",
-            prompt="Most Pythonic way to read a UTF-8 JSON file?",
+            format="bug",
+            prompt="A CLI breaks on Windows. `Path.home() / '/etc/config'` returns `/etc/config`. Why?",
+            code=(
+                "CONFIG_DIR = Path.home() / '/etc/config'\n"
+                "print(CONFIG_DIR)  # expected ~/etc/config"
+            ),
             opts=[
-                ("open(os.path.join(d,'f.json')).read()", False),
-                ("Path(d, 'f.json').read_text(encoding='utf-8')", True),
-                ("with codecs.open(...) as f: f.read()", False),
-                ("io.open(d+'/f.json','r').read()", False),
+                ("pathlib joins lose the left side whenever the right starts with `/` -- it's treated as ABSOLUTE and resets the path", True),
+                ("`Path.home()` returns bytes on Windows; string concat with `/` fails silently", False),
+                ("The `/` operator on Path only works with single components, not paths with separators", False),
+                ("Windows uses `\\` so the left side is dropped when joined with `/`-style paths", False),
             ],
             explanation=(
-                "`pathlib.Path` cross-platform-joins, opens with explicit "
-                "encoding, and avoids file-descriptor leaks since `read_text` "
-                "closes for you. Always pass `encoding=` -- the default is "
-                "platform-dependent (locale.getencoding)."
+                "`Path('/foo') / '/bar'` returns `Path('/bar')` -- the same "
+                "semantics as `os.path.join`. The right operand being absolute "
+                "resets the accumulation. Fix: strip the leading slash (`'etc/"
+                "config'`) or use `Path.home().joinpath('etc', 'config')`. This "
+                "is THE most common pathlib bug and it silently works on your "
+                "dev box if HOME happens to be `/` -- a.k.a. CI containers."
             ),
         ),
         _q(
@@ -1513,38 +1528,55 @@ TEMPLATE_BANK: dict[str, list[Question]] = {
     "constant_time_compare": [
         _q(
             concept="security",
-            format="why",
-            prompt="Why use `hmac.compare_digest(a, b)` instead of `a == b` for tokens?",
+            format="bug",
+            prompt="Auditor says this token check is still vulnerable to a timing attack. You're already using `compare_digest`. What's the leak?",
+            code=(
+                "def verify(tok: str) -> bool:\n"
+                "    if tok not in TOKEN_INDEX:\n"
+                "        return False\n"
+                "    expected = TOKEN_INDEX[tok]\n"
+                "    return hmac.compare_digest(sign(tok), expected)"
+            ),
             opts=[
-                ("It hashes both sides first", False),
-                ("Constant-time comparison defeats timing-based side-channels", True),
-                ("`==` is broken for bytes objects", False),
-                ("It auto-base64-decodes", False),
+                ("`tok not in TOKEN_INDEX` (dict membership) leaks timing differences between hit and miss, letting an attacker enumerate valid tokens", True),
+                ("`compare_digest` isn't constant-time for unequal-length inputs; pad to fixed length first", False),
+                ("`sign(tok)` must be called BEFORE the membership check for constant time", False),
+                ("Dict membership IS constant-time in Python; the leak is elsewhere", False),
             ],
             explanation=(
-                "Plain `==` short-circuits at the first mismatched byte. Network "
-                "attackers can use response-time differences to recover the "
-                "secret one byte at a time. `compare_digest` always scans both "
-                "fully."
+                "Dict lookup is amortized O(1) but NOT constant-wallclock -- "
+                "hash collisions, resizing, and branch timing all vary between "
+                "hit and miss. The pattern leaks 'this token exists' vs 'this "
+                "token doesn't' via response time, letting attackers enumerate "
+                "valid prefixes. Fix: always do the full signing + compare_digest "
+                "path, returning False at the end regardless of lookup result. "
+                "compare_digest IS safe for unequal lengths -- that's one of its "
+                "features."
             ),
         ),
     ],
     "cors_preflight": [
         _q(
             concept="cors",
-            format="cause",
-            prompt="Browser fires an OPTIONS request before POSTing JSON. Why?",
+            format="bug",
+            prompt=(
+                "Your SPA can fetch /api from localhost but gets 'CORS error' in prod. "
+                "The server sets `Access-Control-Allow-Origin: *` AND "
+                "`Access-Control-Allow-Credentials: true`. Where's the bug?"
+            ),
             opts=[
-                ("Always for cross-origin requests", False),
-                ("POST + Content-Type: application/json triggers preflight (non-simple)", True),
-                ("Bug in the browser; should not happen", False),
-                ("Service worker is intercepting", False),
+                ("`Allow-Origin: *` is incompatible with `Allow-Credentials: true` -- browsers reject the combo", True),
+                ("Prod is HTTPS and preflight requires `Access-Control-Allow-Protocol: https`", False),
+                ("Credentials are stripped from OPTIONS requests; must use a custom header to bypass", False),
+                ("`Allow-Origin: *` only works for GET -- POST needs an explicit origin", False),
             ],
             explanation=(
-                "Simple requests (GET/HEAD/POST with form-data Content-Types) "
-                "skip preflight. JSON bodies, custom headers, or methods "
-                "outside GET/HEAD/POST trigger an OPTIONS preflight that the "
-                "server must answer with the right Access-Control-* headers."
+                "The CORS spec is explicit: when `Allow-Credentials: true`, the "
+                "`Allow-Origin` MUST be a specific origin, not `*`. The reason "
+                "is cookie/credential theft -- a wildcard + credentials would "
+                "let any site ride user sessions. Fix: echo the request's Origin "
+                "header back (from an allowlist). Works locally because browsers "
+                "often skip CORS for localhost in dev flags."
             ),
         ),
     ],
@@ -1570,36 +1602,51 @@ TEMPLATE_BANK: dict[str, list[Question]] = {
     "sql_null_semantics": [
         _q(
             concept="sql",
-            format="output",
-            prompt="A column has values [1, 2, NULL]. What does `SELECT * WHERE col NOT IN (2, NULL)` return?",
+            format="bug",
+            prompt=(
+                "A dashboard shows the wrong count. `SELECT COUNT(*) FROM users "
+                "WHERE deleted_at != '2025-01-01'` returns a number, but you "
+                "verified rows with that exact deleted_at exist. What's wrong?"
+            ),
             opts=[
-                ("[1]", False),
-                ("[1, NULL]", False),
-                ("Empty set", True),
-                ("[1, 2]", False),
+                ("Rows with `deleted_at IS NULL` are silently excluded -- `NULL != '2025-01-01'` is UNKNOWN, not TRUE", True),
+                ("Postgres string-compares dates; must cast with `::date`", False),
+                ("`COUNT(*)` ignores rows where any column is NULL", False),
+                ("SQL requires `<>` instead of `!=` in the WHERE clause", False),
             ],
             explanation=(
-                "`x NOT IN (2, NULL)` becomes `x<>2 AND x<>NULL`. Anything "
-                "compared to NULL is UNKNOWN, so the AND is never TRUE. Use "
-                "`NOT EXISTS` or strip NULLs from the IN list."
+                "Three-valued logic: `NULL != x` is UNKNOWN, and WHERE only "
+                "keeps rows that evaluate to TRUE. So every 'active' user (with "
+                "NULL deleted_at) gets silently dropped from your negative "
+                "filter. Fix: `WHERE deleted_at IS DISTINCT FROM '2025-01-01'` "
+                "(Postgres/ANSI) or `WHERE deleted_at != '...' OR deleted_at IS "
+                "NULL`. This is the #1 cause of 'count is off by a lot' bugs."
             ),
         ),
     ],
     "window_function": [
         _q(
             concept="sql-window",
-            format="refactor",
-            prompt="Get each user's most recent order without losing other columns. Best?",
+            format="tradeoff",
+            prompt=(
+                "Two devs want the latest order per user on a table with ties in "
+                "created_at. They write ROW_NUMBER() vs RANK() OVER (PARTITION BY "
+                "user_id ORDER BY created_at DESC). Which picks the right one -- and why?"
+            ),
             opts=[
-                ("GROUP BY user_id and MAX(created_at) -- columns will collapse", False),
-                ("ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY created_at DESC) = 1", True),
-                ("DISTINCT ON every column -- portable across DBs", False),
-                ("SELECT MAX(*) FROM orders", False),
+                ("Always ROW_NUMBER() -- RANK() returns ties and you'll get duplicate rows per user", True),
+                ("Always RANK() -- ROW_NUMBER() is non-deterministic on ties, so results flap between runs", False),
+                ("DENSE_RANK() is the only one that breaks ties correctly", False),
+                ("They're identical except for performance; use whichever the planner prefers", False),
             ],
             explanation=(
-                "Window functions retain row context. `ROW_NUMBER() OVER (...)` "
-                "ranks per-partition without collapsing; filter on rn=1. "
-                "Postgres has `DISTINCT ON` as a shortcut, but it's non-standard."
+                "If two orders share the exact created_at, `RANK()` returns 1 "
+                "for both -- filtering on rank=1 gives you TWO rows for that "
+                "user, silently inflating totals. `ROW_NUMBER()` is guaranteed "
+                "to assign distinct numbers, at the cost of picking arbitrarily "
+                "among ties. Add a tie-breaker to the ORDER BY (e.g. "
+                "`created_at DESC, id DESC`) to make it deterministic. Use "
+                "RANK/DENSE_RANK only when you WANT tied winners."
             ),
         ),
     ],
@@ -1607,18 +1654,26 @@ TEMPLATE_BANK: dict[str, list[Question]] = {
         _q(
             concept="git",
             format="scenario",
-            prompt="You want to update your feature branch with main without ugly merge bubbles. Best?",
+            prompt=(
+                "You rebased 10 commits onto main, pushed with `--force-with-lease`, "
+                "and the push succeeded. A teammate yells that their local branch "
+                "is broken. What went wrong that force-with-lease didn't catch?"
+            ),
             opts=[
-                ("git merge main", False),
-                ("git rebase main, then force-push WITH-LEASE", True),
-                ("git pull --rebase=preserve", False),
-                ("git reset --hard origin/main", False),
+                ("`--force-with-lease` only checks YOUR local ref, not whether anyone else pulled -- pulls don't update your ref", True),
+                ("`--force-with-lease` was silently downgraded to `--force` because the remote was ahead", False),
+                ("The teammate had a stale fetch; force-with-lease works only on rebased MERGE commits", False),
+                ("Rebasing a feature branch is always safe to push; teammate should `git pull --rebase`", False),
             ],
             explanation=(
-                "Rebase replays your commits on top of main for a linear "
-                "history. Use `--force-with-lease` (not `--force`) so you "
-                "abort if someone else pushed to your branch in the meantime. "
-                "Never rebase shared/long-lived branches like main."
+                "`--force-with-lease` protects YOU from overwriting commits YOU "
+                "haven't seen -- not from disrupting collaborators. If a "
+                "teammate already pulled the old tip, your rewrite strands "
+                "their work: their branch diverges and `git pull` tries to "
+                "merge two histories. The rule is: feature branches shared "
+                "with collaborators become 'public' too. Use `--force-if-"
+                "includes` (Git 2.30+) for an even stricter safety net, or "
+                "better, coordinate before rewriting shared history."
             ),
         ),
     ],
@@ -1692,97 +1747,157 @@ TEMPLATE_BANK: dict[str, list[Question]] = {
     "react_keys": [
         _q(
             concept="react-keys",
-            format="why",
-            prompt="Why is `key={index}` an anti-pattern when the list can reorder?",
+            format="bug",
+            prompt=(
+                "A checkbox list for 5 todos looks right, but when the user deletes "
+                "todo #2, the checked state jumps to the wrong row. The code uses "
+                "`key={todo.id}`. What's the actual villain?"
+            ),
+            code=(
+                "{todos.map(todo => (\n"
+                "  <TodoRow key={todo.id}>\n"
+                "    <input type='checkbox' />\n"
+                "  </TodoRow>\n"
+                "))}"
+            ),
             opts=[
-                ("React requires string keys", False),
-                ("Keys identify instances; index keys cause state to follow position, not data", True),
-                ("Performance -- index lookups are O(n)", False),
-                ("It's fine; only matters in React 16", False),
+                ("The <input> is uncontrolled -- checkbox state lives in the DOM node and gets reused when React reconciles by key", True),
+                ("`todo.id` must be a string; numeric ids cause React to fall back to index", False),
+                ("The key should be on the <input>, not the <TodoRow> wrapper", False),
+                ("Deletion triggers a full re-mount, which always resets inputs", False),
             ],
             explanation=(
-                "If you delete the first item, every subsequent item gets a "
-                "new key, so React unmounts and remounts them all. Form "
-                "state, focus, animations get reset. Use a stable id from "
-                "your data."
+                "Stable keys correctly identify each TodoRow instance across "
+                "renders, but the native checkbox is UNCONTROLLED -- its "
+                "'checked' bit lives in the DOM element. When row #2 is deleted, "
+                "React keeps the existing DOM nodes for rows 1,3,4,5 (correct "
+                "by key) but the checkbox DOM still has whatever last state it "
+                "had. Fix: make inputs controlled (`checked={todo.done} onChange="
+                "...`). The deeper lesson: keys solve identity, not state "
+                "ownership."
             ),
         ),
     ],
     "ts_unknown_vs_any": [
         _q(
             concept="typescript",
-            format="idiom",
-            prompt="JSON.parse returns `any`. Best replacement type?",
+            format="bug",
+            prompt=(
+                "A PR adds a `User` type and parses JSON with `JSON.parse(s) as User`. "
+                "TypeScript is happy. The runtime crashes with "
+                "`Cannot read property 'email' of undefined`. Best fix?"
+            ),
             opts=[
-                ("Cast to `any`; it's just JSON", False),
-                ("Type as `unknown` and narrow with a type guard", True),
-                ("`object` -- safer than any", False),
-                ("`Record<string, string>` -- close enough", False),
+                ("Replace `as User` with a runtime validator (zod/valibot/ajv); casts skip checking, validators enforce the shape at runtime", True),
+                ("Change `as User` to `<User>JSON.parse(s)` -- angle-bracket casts do runtime checks", False),
+                ("Narrow `JSON.parse(s)` with `typeof result === 'object'` -- that's enough to confirm User", False),
+                ("Wrap the parse in a try/catch -- malformed JSON is the only way this fails", False),
             ],
             explanation=(
-                "`any` disables type-checking everywhere it touches. "
-                "`unknown` forces you to narrow before use, keeping safety. "
-                "Pair with a runtime validator (zod, valibot) for end-to-end "
-                "guarantees."
+                "`as X` is a TYPE assertion, not a runtime check. It's a "
+                "developer promise that gets erased at compile time. If the "
+                "API returns `{user: {...}}` instead of the User directly, "
+                "TypeScript still greenlights it. Zod et al. give you a schema "
+                "AND a type that are guaranteed to agree. The `unknown` type "
+                "alone is better than `any` because it forces SOME narrowing, "
+                "but even narrowed code only checks what you remember to check."
             ),
         ),
     ],
     "eq_eq_eq": [
         _q(
             concept="javascript",
-            format="output",
-            prompt="What does `[] == false` evaluate to in JS?",
+            format="bug",
+            prompt=(
+                "A `user.role === 'admin'` guard works in tests, fails in prod with "
+                "JSON-parsed data. Devtools shows `user.role` is `'admin'`. Why does "
+                "strict equality still fail?"
+            ),
+            code=(
+                "// API payload has trailing whitespace or a Unicode lookalike\n"
+                "console.log(user.role);            // 'admin'\n"
+                "console.log(user.role === 'admin'); // false"
+            ),
             opts=[
-                ("false (different types)", False),
-                ("true (both coerce to '' / 0)", True),
-                ("TypeError", False),
-                ("undefined", False),
+                ("The string likely has a zero-width space / non-breaking space / Cyrillic 'а' -- devtools shows them identical but codepoints differ", True),
+                ("`===` falls back to `==` for single-character strings; upgrade Node", False),
+                ("JSON.parse returns String objects, not primitives, so `===` fails on identity", False),
+                ("`'admin'` is interned but API strings aren't; use `.valueOf()` first", False),
             ],
             explanation=(
-                "`==` triggers ToPrimitive then ToNumber: `[]` -> `''` -> 0, "
-                "`false` -> 0. Equal! This is why ESLint's `eqeqeq` rule "
-                "exists. Always use `===` unless you specifically want "
-                "null-undefined coalescing (`x == null`)."
+                "`===` is fine; the trap is visual. Hidden codepoints (ZWSP "
+                "U+200B, NBSP U+00A0, Cyrillic 'а' U+0430) render identically. "
+                "Debug with `[...user.role].map(c => c.codePointAt(0))`. "
+                "Production defenses: normalize with `.trim().normalize('NFKC')` "
+                "before comparing, or validate enum fields with zod. "
+                "JSON.parse ALWAYS returns primitive strings, not String "
+                "objects."
             ),
         ),
     ],
     "complexity_in_list": [
         _q(
             concept="complexity",
-            format="complexity",
-            prompt="`x in seen` where `seen` is a list of N items. Big-O?",
+            format="bug",
+            prompt=(
+                "A dedup job converts `seen = []` to `seen = set()` and now runs "
+                "20x faster -- except for one input class where it's SLOWER than "
+                "the list version. What's the input?"
+            ),
+            code=(
+                "# items is a list of dicts / lists / numpy arrays\n"
+                "seen = set()\n"
+                "for item in items:\n"
+                "    if item not in seen:\n"
+                "        seen.add(item)\n"
+                "        process(item)"
+            ),
             opts=[
-                ("O(1) -- Python optimizes membership", False),
-                ("O(log N) -- bisect is implicit", False),
-                ("O(N) -- linear scan", True),
-                ("O(N log N)", False),
+                ("Items are unhashable (dicts/lists/ndarray) -- raises TypeError; list version 'worked' because `in` on list uses == not hash", True),
+                ("Small inputs (<100) -- set's hash overhead beats list's linear scan", False),
+                ("Items with expensive __hash__ methods -- list __eq__ is always faster", False),
+                ("Items with a lot of duplicates -- sets have O(n) worst-case for collisions", False),
             ],
             explanation=(
-                "`in` on a list is linear. Convert to a set for O(1) average. "
-                "This is the most common 'works in dev, dies in prod' "
-                "performance bug -- a tight loop with `if x in big_list`."
+                "Sets require hashable keys. `dict`, `list`, `ndarray`, and any "
+                "mutable-by-default class (dataclass without frozen=True) raise "
+                "`TypeError: unhashable type`. The list version silently used "
+                "`==` and worked, at O(n^2). Fix: build a set of a hashable "
+                "projection (`tuple(item)`, `frozenset(d.items())`, `item.id`). "
+                "Small-input optimization is real (~20 elements) but rare in "
+                "practice. This is the classic 'replace list-in with set-in' "
+                "pitfall."
             ),
         ),
     ],
     "cloze_counter": [
         _q(
             concept="collections",
-            format="cloze",
-            prompt="Fill the blank to count word occurrences in one line:",
+            format="gotcha",
+            prompt=(
+                "A teammate uses `Counter.most_common()` for a leaderboard. QA "
+                "reports the top-10 sometimes includes users with score 0. The "
+                "Counter is built with `Counter(scores_by_user)`. What happened?"
+            ),
             code=(
-                "from collections import _____\n"
-                "counts = _____(words)"
+                "scores = Counter(scores_by_user)    # dict: user -> int\n"
+                "scores['dropped_user'] -= 5          # subtract a penalty\n"
+                "top = scores.most_common(10)"
             ),
             opts=[
-                ("defaultdict / defaultdict(int)", False),
-                ("Counter / Counter", True),
-                ("OrderedDict / OrderedDict", False),
-                ("ChainMap / ChainMap", False),
+                ("Counter.most_common() includes ZERO and NEGATIVE counts; only `+counter` (or filtering) drops non-positive entries", True),
+                ("Counter is insertion-ordered; most_common falls back to insertion order on ties and includes stale zeros", False),
+                ("`Counter -= penalty` doesn't exist; the line silently no-ops, leaving raw scores", False),
+                ("most_common(10) returns 10 items even if fewer have positive counts, padding with zeros", False),
             ],
             explanation=(
-                "`Counter(iterable)` does it in one call and gives you "
-                "`.most_common(k)` for free. defaultdict(int) works but is "
-                "more code; OrderedDict and ChainMap solve different problems."
+                "Counter willingly stores zero and negative counts -- that's "
+                "what lets `-` and `subtract` behave like a multiset difference. "
+                "`most_common` sorts by value, so negatives appear near the "
+                "bottom and zeros can tie in. Canonical cleanup: `+scores` "
+                "(unary plus drops zero/negative entries). Full idiom: "
+                "`(+scores).most_common(10)`. Not in any tutorial, but it's "
+                "the reason Counter is a multiset, not a frequency dict."
             ),
         ),
     ],
