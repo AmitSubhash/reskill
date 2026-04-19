@@ -32,7 +32,6 @@ from .palette import (
     ASH,
     paint,
 )
-from .panel import visible_len
 from .question import Question, generate_question
 from . import state as state_mod
 
