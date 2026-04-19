@@ -345,7 +345,48 @@ CHECKS = [
 ]
 
 
-def run() -> int:
+def _autofix(results: list[CheckResult]) -> list[str]:
+    """Try to silently resolve any warn/fail we know how to fix.
+
+    Returns a list of human-readable actions taken.
+    """
+    actions: list[str] = []
+    import json
+    import os as _os
+
+    for r in results:
+        if r.status == "pass":
+            continue
+        name = r.name
+        if name == "pacing":
+            # Reset the pacing state file to clear rate-limit accumulation.
+            pac = Path.home() / ".reskill" / "state" / "pacing.json"
+            pac.parent.mkdir(parents=True, exist_ok=True)
+            pac.write_text(json.dumps({
+                "thinking_started_at": 0,
+                "last_quiz_finished_at": 0,
+                "last_concept_at": {},
+                "quiz_timestamps": [],
+            }))
+            actions.append("cleared ~/.reskill/state/pacing.json (hourly/daily cap reset)")
+        elif name == "thinking signal" and r.status == "warn":
+            # Stale thinking flag -- remove it.
+            try:
+                THINKING_FILE.unlink()
+                actions.append("removed stale ~/.reskill/state/thinking flag")
+            except (OSError, FileNotFoundError):
+                pass
+        elif name == "hook schema" and "legacy" in r.detail:
+            # Nesting fix: run reinstall.
+            from . import hookinstall as hi
+            hi.uninstall()
+            hi.install()
+            actions.append("ran `reskill uninstall && reskill install` to fix hook nesting")
+    _ = _os  # keep the import side-effect-free silencer
+    return actions
+
+
+def run(fix: bool = False) -> int:
     print()
     print(paint("  reSkill doctor", SAGE, BOLD))
     print(paint("  checking every integration point...", ASH, DIM))
@@ -376,5 +417,18 @@ def run() -> int:
     )
     print(f"  {summary}")
     print()
+
+    if fix and (warn_n or fail_n):
+        print(paint("  running --fix...", ASH, DIM))
+        actions = _autofix(results)
+        if not actions:
+            print(paint("  nothing auto-fixable", ASH, DIM))
+        else:
+            for a in actions:
+                print(paint(f"  * {a}", SAGE))
+            print()
+            print(paint("  re-checking...", ASH, DIM))
+            return run(fix=False)
+        print()
 
     return 0 if fail_n == 0 else 1

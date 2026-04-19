@@ -210,7 +210,7 @@ def main(argv: list[str] | None = None) -> int:
         return review_cmd.run()
     if cmd == "doctor":
         from . import doctor
-        return doctor.run()
+        return doctor.run(fix="--fix" in rest)
     if cmd == "topics":
         from . import topics_cmd
         return topics_cmd.run()
