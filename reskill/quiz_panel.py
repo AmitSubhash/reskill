@@ -27,18 +27,16 @@ import time
 import tty
 from pathlib import Path
 
-from . import pacing
-from . import scheduler
+from . import pacing, scheduler
 from . import state as state_mod
-from .review_queue import ReviewQueue
 from .activity import have_reskill_hooks, is_claude_active, recent_transcript_text
-from .llm_gen import Prefetcher, wrap_code_for_prompt
 from .git_diffs import fetch_commits, project_root
 from .inline_box import (
     render_correct_flash,
     render_question,
     render_wrong_reveal,
 )
+from .llm_gen import Prefetcher, wrap_code_for_prompt
 from .palette import (
     ASH,
     BOLD,
@@ -50,7 +48,7 @@ from .palette import (
     TEAL,
     paint,
 )
-
+from .review_queue import ReviewQueue
 
 STATE_DIR = Path.home() / ".reskill" / "state"
 
@@ -139,6 +137,27 @@ def _set_pane_border(state: str) -> None:
     except (subprocess.SubprocessError, FileNotFoundError, OSError):
         pass
     _last_border_state = state
+
+
+def _pane_focused() -> bool:
+    """True when we're the active pane of the current tmux window.
+
+    Used to pick exactly one question-view footer (focused vs
+    unfocused) instead of stacking both, which confused users with
+    contradictory affordances. Returns True when not in tmux (single
+    terminal -- focus is implicit).
+    """
+    if not os.environ.get("TMUX"):
+        return True
+    import subprocess
+    try:
+        r = subprocess.run(
+            ["tmux", "display-message", "-p", "-F", "#{pane_active}"],
+            check=False, capture_output=True, text=True, timeout=0.5,
+        )
+        return r.stdout.strip() == "1"
+    except (subprocess.SubprocessError, FileNotFoundError, OSError):
+        return True
 
 
 def _set_cbreak() -> list[int]:
@@ -231,10 +250,36 @@ def _render_footer(items: list[tuple[str, str]]) -> str:
 # ───────── Cards ─────────
 
 
-def _render_idle_card(session: SessionCounters, _paced: pacing.PacingState) -> None:
-    """Shown when Claude is not currently thinking."""
-    _set_pane_border("idle")
-    _clear_screen()
+def _idle_signature_preview(session: SessionCounters) -> tuple:
+    """Cheap signature of idle-card visible data.
+
+    Computes everything the full render would show so the run loop can
+    compare and skip no-op re-renders. Reads the transcript + state but
+    doesn't touch stdout.
+    """
+    state = state_mod.load()
+    source = "hooks" if have_reskill_hooks() else "transcript poll"
+    live_text = recent_transcript_text(cwd=os.getcwd() or project_root())
+    due_n, new_n = scheduler.concepts_ready(
+        live_text or "", state, set(state.seen_questions)
+    )
+    return (
+        "idle",
+        session.served, session.correct, session.wrong, session.skipped,
+        state.streak, state.correct_today, state.daily_goal,
+        due_n, new_n, source,
+    )
+
+
+def _render_idle_card(
+    session: SessionCounters, _paced: pacing.PacingState
+) -> tuple:
+    """Shown when Claude is not currently thinking.
+
+    Returns a signature tuple of the visible content so the caller can
+    skip redundant re-renders (flicker fix). The signature is cheap to
+    compare and captures every piece of data we actually display.
+    """
     state = state_mod.load()
     source = "hooks" if have_reskill_hooks() else "transcript poll"
 
@@ -244,6 +289,15 @@ def _render_idle_card(session: SessionCounters, _paced: pacing.PacingState) -> N
         live_text or "", state, set(state.seen_questions)
     )
 
+    signature = (
+        "idle",
+        session.served, session.correct, session.wrong, session.skipped,
+        state.streak, state.correct_today, state.daily_goal,
+        due_n, new_n, source,
+    )
+
+    _set_pane_border("idle")
+    _clear_screen()
     lines = [
         "",
         "  " + paint("reSkill", TEAL, BOLD) + "   " + session.badge(),
@@ -269,6 +323,7 @@ def _render_idle_card(session: SessionCounters, _paced: pacing.PacingState) -> N
     sys.stdout.write("\n\n")
     sys.stdout.write(_render_footer(FOOTER_IDLE))
     sys.stdout.flush()
+    return signature
 
 
 def _render_cooldown_card(
@@ -287,8 +342,11 @@ def _render_cooldown_card(
     _clear_screen()
     state = state_mod.load()
     if "min-gap" in reason:
-        wait_s = max(1, int(pacing.seconds_until_next_allowed(paced)))
-        countdown = paint(f"next question in ~{wait_s}s", GOLD, BOLD)
+        wait_s = int(pacing.seconds_until_next_allowed(paced))
+        if wait_s < 3:
+            countdown = paint("next question soon", GOLD, BOLD)
+        else:
+            countdown = paint(f"next question in ~{wait_s}s", GOLD, BOLD)
     elif "hourly" in reason or "daily" in reason:
         countdown = paint("rate limit reached -- try again later", GOLD, BOLD)
     else:
@@ -360,9 +418,8 @@ def _render_question_view(question, state: state_mod.State, session: SessionCoun
     sys.stdout.write("  " + session.badge() + "\n")
     sys.stdout.write(render_question(question, streak=state.streak, compact=True))
     sys.stdout.write("\n")
-    sys.stdout.write(_render_footer(FOOTER_QUESTION_UNFOCUSED))
-    sys.stdout.write("\n\n")
-    sys.stdout.write(_render_footer(FOOTER_QUESTION_FOCUSED))
+    footer = FOOTER_QUESTION_FOCUSED if _pane_focused() else FOOTER_QUESTION_UNFOCUSED
+    sys.stdout.write(_render_footer(footer))
     sys.stdout.write("\n")
     sys.stdout.flush()
 
@@ -600,8 +657,10 @@ def _quiz_loop_once(
         if ch == b"B":
             dismissal = "bury"
             break
-        if ch == b"q":
-            raise KeyboardInterrupt
+        # `q` is scoped to the idle card only (see FOOTER_IDLE). Mid-
+        # question it would be an undocumented exit that kills a running
+        # session -- users have pressed it by accident. Require Ctrl-C
+        # (which `_read_key` doesn't surface; it raises directly).
 
     pacing.note_quiz_finished(paced)
     pacing.save(paced)
@@ -722,6 +781,7 @@ def run() -> int:
     _hide_cursor()
 
     last_render = ""   # 'idle' | 'question' | 'reveal'
+    last_idle_signature: tuple | None = None
     last_concept: str | None = None
     recent_formats: list[str] = []
 
@@ -743,14 +803,19 @@ def run() -> int:
                 )
             else:
                 if last_render != "idle":
-                    _render_idle_card(session, paced)
+                    last_idle_signature = _render_idle_card(session, paced)
                     last_render = "idle"
                 key = _read_key(timeout=1.0)
                 if key and key[:1] == b"q":
                     return 0
-                # Re-render periodically so counters + "next in Ns" update.
-                if key is None and int(time.time()) % 3 == 0:
-                    _render_idle_card(session, paced)
+                # Re-compute the signature periodically (not every tick
+                # -- concepts_ready touches the transcript). Only actually
+                # re-render when the visible data changed. Kills the 3s
+                # full-clear flicker that made the pane feel broken.
+                if key is None and int(time.time()) % 10 == 0:
+                    new_sig = _idle_signature_preview(session)
+                    if new_sig != last_idle_signature:
+                        last_idle_signature = _render_idle_card(session, paced)
     except KeyboardInterrupt:
         return 0
     finally:

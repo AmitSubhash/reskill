@@ -1,279 +1,201 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en" class="no-js">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>reSkill — replace the scroll with the skill</title>
+  <title>reSkill &mdash; replace the scroll with the skill</title>
   <meta name="description"
-    content="Quizzes that appear while Claude Code is thinking. Replace doomscrolling with actually understanding what Claude does." />
-  <meta name="color-scheme" content="dark" />
-  <meta name="theme-color" content="#0e1117" />
+    content="Micro-quizzes that appear while Claude Code is thinking. Terminal-native, research-backed, MIT." />
+  <meta name="color-scheme" content="light dark" />
+  <meta name="theme-color" content="#faf9f5" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#1a1a18" media="(prefers-color-scheme: dark)" />
 
-  <!-- OpenGraph -->
-  <meta property="og:title" content="reSkill — replace the scroll with the skill" />
-  <meta property="og:description"
-    content="Quizzes during Claude Code's thinking time. Terminal-native, research-backed, free." />
+  <meta property="og:title" content="reSkill &mdash; replace the scroll with the skill" />
+  <meta property="og:description" content="Quizzes during Claude Code's thinking time. Terminal-native, research-backed, free." />
   <meta property="og:type" content="website" />
-  <meta property="og:image"
-    content="https://raw.githubusercontent.com/AmitSubhash/reskill/main/marketing/videos/reskill-social-preview.png" />
+  <meta property="og:image" content="https://raw.githubusercontent.com/AmitSubhash/reskill/main/marketing/videos/reskill-social-preview.png" />
   <meta name="twitter:card" content="summary_large_image" />
 
   <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet"
-    href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700;800;900&family=Geist+Mono:wght@400;500;700&family=Inter:wght@400;500;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap" />
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" />
 
   <link rel="stylesheet" href="./style.css" />
 
-  <!-- Three.js via ESM CDN so the 3D hero renders without a build step -->
-  <script type="importmap">
-    {
-      "imports": {
-        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"
-      }
-    }
-  </script>
+  <script>document.documentElement.classList.replace('no-js', 'js');</script>
 </head>
 
 <body>
+  <div class="cursor" aria-hidden="true"></div>
 
-  <!-- Animated background layer: soft orbs + grain -->
-  <div class="bg-orbs" aria-hidden="true">
-    <div class="orb orb-sage"></div>
-    <div class="orb orb-teal"></div>
-    <div class="orb orb-gold"></div>
-  </div>
-  <div class="bg-grain" aria-hidden="true"></div>
-
-  <!-- ───────── HERO ───────── -->
-  <header class="nav">
-    <div class="nav-inner">
-      <a href="#" class="nav-brand">
-        <span class="brand-dot"></span>
-        reSkill
-      </a>
-      <nav class="nav-links">
-        <a href="#how">how</a>
-        <a href="#install">install</a>
-        <a href="https://github.com/AmitSubhash/reskill">github ↗</a>
-      </nav>
-    </div>
-  </header>
+  <nav class="topnav">
+    <a href="#" class="brand">reskill</a>
+    <span class="sep">&middot;</span>
+    <a href="#how">how it works</a>
+    <span class="sep">&middot;</span>
+    <a href="#install">install</a>
+    <span class="sep">&middot;</span>
+    <a href="https://github.com/AmitSubhash/reskill">github</a>
+  </nav>
 
   <main>
     <section class="hero">
-      <div class="hero-content">
-        <p class="eyebrow">
-          <span class="eyebrow-pulse"></span>
-          v0.2 · MIT · works with Claude Code
-        </p>
-        <h1>
-          Replace the scroll<br />
-          with the <span class="grad">skill</span>.
-        </h1>
-        <p class="sub">
-          While Claude thinks for 23 seconds, reSkill hands you a quiz about
-          the exact code it&rsquo;s working on. Built for the developer who
-          doesn&rsquo;t want to go soft.
-        </p>
-        <div class="cta-row">
-          <div class="install" role="group" aria-label="install command">
-            <span class="install-prompt">$</span>
-            <code id="install-cmd">pip install git+https://github.com/AmitSubhash/reskill.git</code>
-            <button class="copy-btn" id="copy-btn" aria-label="copy install command">
-              <svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor"
-                stroke-width="1.8">
-                <rect x="6" y="6" width="10" height="10" rx="2" />
-                <path d="M4 14V5a1 1 0 0 1 1-1h9" />
-              </svg>
-              <span id="copy-label">copy</span>
-            </button>
-          </div>
-          <a class="btn btn-primary" href="https://github.com/AmitSubhash/reskill">
-            GitHub
-            <svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor"
-              stroke-width="1.8">
-              <path d="M7 13l6-6m0 0H8m5 0v5" />
-            </svg>
-          </a>
-        </div>
+      <h1>Replace the scroll with the <em>skill</em>.</h1>
+      <p class="lede">
+        While Claude thinks for 23&nbsp;seconds, reSkill hands you a quiz about
+        the exact code it&rsquo;s working on. Built for the developer who
+        doesn&rsquo;t want to go soft.
+      </p>
+
+      <div class="install" id="install-primary">
+        <span class="prompt">$</span><code id="install-cmd">pip install git+https://github.com/AmitSubhash/reskill.git</code><button class="copy" id="copy-btn" aria-label="copy install command"><span id="copy-label">copy</span></button><span class="caret" aria-hidden="true"></span>
       </div>
 
-      <!-- 3D hero: rotating terminal cube, one quiz face per side -->
-      <div class="stage" aria-hidden="true">
-        <canvas id="hero-cube" class="hero-cube"></canvas>
-        <div class="stage-glow"></div>
-      </div>
+      <p class="links">
+        <a href="https://github.com/AmitSubhash/reskill">github &rarr;</a>
+        <a href="https://github.com/AmitSubhash/reskill#readme">docs &rarr;</a>
+      </p>
     </section>
 
-    <!-- ───────── HOW IT WORKS ───────── -->
-    <section id="how" class="how">
-      <div class="how-header">
-        <p class="eyebrow eyebrow-quiet">how it works</p>
-        <h2>Three seconds between your prompt and the quiz.</h2>
-      </div>
-
-      <div class="steps">
-        <div class="step glass glass-hover">
-          <div class="step-num">01</div>
-          <h3>Install the hooks.</h3>
-          <p>
-            <code>reskill install</code> wires into Claude Code&rsquo;s
-            <code>UserPromptSubmit</code>, <code>PreToolUse</code>,
-            <code>PostToolUse</code> and <code>Stop</code>. Reversible.
-            Preserves your existing statusline.
-          </p>
-        </div>
-
-        <div class="step glass glass-hover">
-          <div class="step-num">02</div>
-          <h3>Claude thinks. You see a question.</h3>
-          <p>
-            The question is grounded in your live transcript &mdash; your
-            actual code, not Leetcode trivia. Answered in 20&ndash;45
-            seconds with keyboard <kbd>1</kbd>&ndash;<kbd>4</kbd>.
-          </p>
-        </div>
-
-        <div class="step glass glass-hover">
-          <div class="step-num">03</div>
-          <h3>The wrong answers stick harder.</h3>
-          <p>
-            Fast-wrong answers get flagged &ldquo;sticky&rdquo; &mdash; the
-            hypercorrection effect means these are where learning bites
-            deepest. Reviewed later with <code>reskill review</code>.
-          </p>
-        </div>
-      </div>
+    <section class="prose">
+      <p>
+        Claude Code ships hooks for every prompt, tool call, and stop event.
+        reSkill wires into those hooks, watches your live transcript, and
+        renders a single question whenever Claude is mid-thought. You answer,
+        Claude finishes, you&rsquo;ve both shipped something.
+      </p>
     </section>
 
-    <!-- ───────── LIVE DEMO ───────── -->
-    <section class="demo">
-      <div class="demo-inner">
-        <p class="eyebrow eyebrow-quiet">the 15-second pitch</p>
-        <h2>Replace the scroll. Literally.</h2>
-        <div class="video-frame glass">
-          <video
-            src="https://raw.githubusercontent.com/AmitSubhash/reskill/main/marketing/videos/reskill-short.mp4"
-            autoplay muted loop playsinline preload="metadata"
-            poster="https://raw.githubusercontent.com/AmitSubhash/reskill/main/marketing/videos/reskill-social-preview.png">
-          </video>
-        </div>
-      </div>
+    <section class="mono-block" aria-label="sample transcript">
+<pre><code>$ reskill claude
+
+  &#x2503; think about this
+  Why does <span class="hl">@lru_cache</span> leak memory in long-running workers?
+
+    1) unlimited cache by default in modern Python  <span class="ok">&check;</span>
+    2) User objects aren&rsquo;t hashable
+    3) db.query returns a new object each call
+    4) lru_cache should go on methods
+
+  press <kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> <kbd>4</kbd>  &middot;  <kbd>x</kbd> skip  &middot;  <kbd>X</kbd> mute</code></pre>
     </section>
 
-    <!-- ───────── FEATURES ───────── -->
-    <section class="features">
-      <div class="features-inner">
-        <p class="eyebrow eyebrow-quiet">what&rsquo;s inside</p>
-        <h2>Research-grounded. Terminal-native. Yours.</h2>
-        <div class="features-grid">
-          <div class="feat glass">
-            <div class="feat-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor"
-                stroke-width="1.6">
-                <path d="M3 7l9-4 9 4-9 4-9-4z" />
-                <path d="M3 12l9 4 9-4" />
-                <path d="M3 17l9 4 9-4" />
-              </svg>
-            </div>
-            <h3>SM-2 + 85% rule</h3>
-            <p>
-              Questions sorted by spaced-repetition urgency, then by Wilson
-              et al. 2019 error-rate sweet spot. Interleaved across
-              confusable concept clusters.
-            </p>
-          </div>
-          <div class="feat glass">
-            <div class="feat-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor"
-                stroke-width="1.6">
-                <circle cx="12" cy="12" r="9" />
-                <path d="M8 12l3 3 5-6" />
-              </svg>
-            </div>
-            <h3>Questions from your diffs</h3>
-            <p>
-              <code>reskill gen --live</code> feeds your actual Claude
-              transcript to the LLM and returns a question about what you
-              just built. Validated against the NBME item-writing rubric.
-            </p>
-          </div>
-          <div class="feat glass">
-            <div class="feat-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor"
-                stroke-width="1.6">
-                <path d="M4 6h16M4 12h12M4 18h8" />
-              </svg>
-            </div>
-            <h3>tmux or two windows</h3>
-            <p>
-              <code>reskill claude</code> splits tmux with the quiz on the
-              side. On macOS without tmux, it opens a second Terminal
-              window. No overlay hackery.
-            </p>
-          </div>
-          <div class="feat glass">
-            <div class="feat-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor"
-                stroke-width="1.6">
-                <path d="M4 18V6m16 12V6M4 12h16" />
-              </svg>
-            </div>
-            <h3>Learning map</h3>
-            <p>
-              <code>reskill topics</code> shows 50 concepts grouped by
-              cluster with your per-concept mastery. See the gaps before
-              they bite.
-            </p>
-          </div>
-        </div>
-      </div>
+    <section id="how" class="prose">
+      <h2>How it works</h2>
+      <ol>
+        <li>
+          <strong>Install the hooks.</strong> <code>reskill install</code>
+          writes entries to <code>~/.claude/settings.json</code> for
+          <code>UserPromptSubmit</code>, <code>PreToolUse</code>,
+          <code>PostToolUse</code>, and <code>Stop</code>. Reversible; backs
+          up your existing file.
+        </li>
+        <li>
+          <strong>Claude thinks. You see a question.</strong> The question is
+          grounded in your live transcript &mdash; your actual code, not
+          Leetcode trivia. Answer with <kbd>1</kbd>&ndash;<kbd>4</kbd>.
+        </li>
+        <li>
+          <strong>The wrong answers stick harder.</strong> Fast-wrong answers
+          are flagged as high-confidence misses &mdash; re-surfaced later via
+          <code>reskill review</code>. Hypercorrection effect (Butterfield &amp;
+          Metcalfe 2001).
+        </li>
+      </ol>
     </section>
 
-    <!-- ───────── INSTALL / CTA ───────── -->
-    <section id="install" class="install-cta">
-      <div class="install-inner glass">
-        <h2>Start replacing the scroll.</h2>
-        <p class="sub">
-          Two commands. No API key. No tracking. MIT.
-        </p>
-        <div class="install big">
-          <span class="install-prompt">$</span>
-          <code>pip install git+https://github.com/AmitSubhash/reskill.git</code>
-        </div>
-        <div class="install big">
-          <span class="install-prompt">$</span>
-          <code>reskill install &amp;&amp; reskill claude</code>
-        </div>
-        <a class="btn btn-ghost" href="https://github.com/AmitSubhash/reskill#readme">
-          read the docs →
-        </a>
+    <section class="prose">
+      <h2>Scheduler</h2>
+      <p>
+        Questions are picked by a small scheduler: overdue items from
+        spaced-repetition first, then new concepts, interleaved only across
+        confusable clusters so you don&rsquo;t drill one topic in a row.
+        Difficulty targets the 85% rule from Wilson et&nbsp;al. 2019. Format
+        rotates so you&rsquo;re not always answering multiple-choice. Source
+        of every decision: <code>reskill/scheduler.py</code>, with citations
+        in the docstrings.
+      </p>
+    </section>
+
+    <section class="prose">
+      <h2>Usage</h2>
+      <dl class="cmds">
+        <dt><code>reskill claude</code></dt>
+        <dd>tmux split with a quiz pane alongside claude</dd>
+        <dt><code>reskill next</code></dt>
+        <dd>one question, right now</dd>
+        <dt><code>reskill session</code></dt>
+        <dd>deck from your last 7 days of commits</dd>
+        <dt><code>reskill review</code></dt>
+        <dd>drill recently missed questions</dd>
+        <dt><code>reskill topics</code></dt>
+        <dd>per-concept mastery map</dd>
+        <dt><code>reskill gen --live</code></dt>
+        <dd>generate a question from your live transcript</dd>
+        <dt><code>reskill doctor</code></dt>
+        <dd>diagnose the integration</dd>
+      </dl>
+    </section>
+
+    <section class="prose">
+      <h2>FAQ</h2>
+      <details>
+        <summary>Do I need an API key?</summary>
+        <p>No. Quiz generation reuses the <code>claude</code> CLI you already
+        have installed. The built-in question bank covers 50 concepts with
+        zero network calls.</p>
+      </details>
+      <details>
+        <summary>Does it send my code anywhere?</summary>
+        <p>Only to whatever <code>claude</code> already sends when you use
+        Claude Code. reSkill doesn&rsquo;t make independent network calls.</p>
+      </details>
+      <details>
+        <summary>What if I don&rsquo;t use tmux?</summary>
+        <p>Skip <code>reskill claude</code>. Use <code>reskill session</code>
+        after each coding session, or wire <code>reskill next</code> to a
+        Stop-hook for inline prompts.</p>
+      </details>
+      <details>
+        <summary>Can I disable it temporarily?</summary>
+        <p><code>reskill uninstall</code> removes only reSkill&rsquo;s entries
+        from your Claude settings. Everything else stays intact.</p>
+      </details>
+      <details>
+        <summary>Who is this for?</summary>
+        <p>Developers who use Claude Code heavily and have noticed their
+        focus drifting during the 10&ndash;30&nbsp;second tool-call pauses.
+        If you don&rsquo;t reach for your phone during those pauses, you
+        don&rsquo;t need reSkill.</p>
+      </details>
+    </section>
+
+    <section id="install" class="prose">
+      <h2>Install</h2>
+      <div class="install">
+        <span class="prompt">$</span><code>pip install git+https://github.com/AmitSubhash/reskill.git</code>
+      </div>
+      <div class="install">
+        <span class="prompt">$</span><code>reskill install &amp;&amp; reskill claude</code>
       </div>
     </section>
   </main>
 
-  <footer class="footer">
-    <div class="footer-inner">
-      <div class="footer-brand">
-        <span class="brand-dot"></span>
-        reSkill
-      </div>
-      <div class="footer-right">
-        <a href="https://github.com/AmitSubhash/reskill">github</a>
-        <a href="https://github.com/AmitSubhash/reskill/blob/main/CHANGELOG.md">changelog</a>
-        <a href="https://github.com/AmitSubhash/reskill/issues">issues</a>
-      </div>
-    </div>
-    <p class="footer-note">
-      built by <a href="https://github.com/AmitSubhash">Amit Subhash</a> ·
-      scheduler cites Bjork, Rohrer &amp; Taylor 2007, Wilson et al. 2019,
+  <footer class="foot">
+    <p>
+      MIT licensed &middot;
+      <a href="https://github.com/AmitSubhash/reskill">github</a> &middot;
+      <a href="https://github.com/AmitSubhash/reskill/blob/main/CHANGELOG.md">changelog</a> &middot;
+      <a href="https://github.com/AmitSubhash/reskill/issues">issues</a>
+    </p>
+    <p class="muted">
+      scheduler cites Bjork, Rohrer &amp; Taylor 2007, Wilson et&nbsp;al. 2019,
       Butler &amp; Roediger 2008, Butterfield &amp; Metcalfe 2001.
+      built by <a href="https://github.com/AmitSubhash">Amit Subhash</a>.
     </p>
   </footer>
 
   <script src="./script.js" defer></script>
-  <script type="module" src="./hero-cube.js"></script>
 </body>
-
 </html>

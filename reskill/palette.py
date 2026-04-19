@@ -1,12 +1,14 @@
 """Terminal color palette with readable defaults across backgrounds.
 
 Themes:
-  - `everforest` (default): true-color palette with readable contrast
-    tweaked so ASH/STONE/DARK_ASH are visible on both light AND dark
-    terminals (old values were too close to middle gray).
-  - `mono`: only BOLD / DIM / terminal-default foreground. Set
-    `RESKILL_THEME=mono` to enable. Useful for light terminals, low-
-    vision setups, or tmux configs that mangle RGB.
+  - `everforest` (default on truecolor terminals): readable contrast
+    tuned so ASH/STONE/DARK_ASH remain visible on both light and dark
+    backgrounds.
+  - `mono`: only BOLD / DIM / terminal-default foreground. Auto-selected
+    when COLORTERM isn't `truecolor`/`24bit` (Apple Terminal.app, many
+    ssh contexts, tmux without RGB passthrough), since the everforest
+    24-bit values collapse to an unreadable gray on 256-color terminals.
+    Also set manually via `RESKILL_THEME=mono`.
 
 Also respects the standard `NO_COLOR` env var (https://no-color.org):
 if it's set to anything, we fall back to mono automatically.
@@ -16,20 +18,33 @@ from __future__ import annotations
 
 import os
 
-
 RESET = "\033[0m"
 BOLD = "\033[1m"
 DIM = "\033[2m"
 
 
+def _supports_truecolor() -> bool:
+    """Does this terminal render 24-bit color?
+
+    We trust COLORTERM when set ("truecolor" / "24bit" are the two
+    values in the wild). When it's absent, be conservative and answer
+    no -- Apple Terminal.app, mosh, and many SSH jumphosts don't set
+    it, and our Everforest values collapse to a near-invisible gray
+    on 256-color terminals.
+    """
+    colorterm = (os.environ.get("COLORTERM") or "").lower()
+    return colorterm in ("truecolor", "24bit")
+
+
 def _theme() -> str:
+    explicit = os.environ.get("RESKILL_THEME")
+    if explicit:
+        return explicit.lower()
     if os.environ.get("NO_COLOR"):
         return "mono"
-    # Default: Everforest. Mono collapses everything to BOLD/DIM and
-    # feels washed out on common dark terminals; we only want it for
-    # light backgrounds or accessibility opt-ins. Explicit switch:
-    # RESKILL_THEME=mono.
-    return os.environ.get("RESKILL_THEME", "everforest").lower()
+    if not _supports_truecolor():
+        return "mono"
+    return "everforest"
 
 
 def rgb(r: int, g: int, b: int) -> str:

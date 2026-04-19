@@ -21,7 +21,6 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-
 STATE_DIR = Path.home() / ".reskill" / "state"
 PACING_FILE = STATE_DIR / "pacing.json"
 
@@ -139,22 +138,28 @@ def can_fire_now(
     if ps.last_quiz_finished_at > 0:
         gap = now - ps.last_quiz_finished_at
         if gap < MIN_SECONDS_BETWEEN_QUIZZES:
-            return GateResult(False, f"rate:min-gap({int(gap)}s<90s)")
+            return GateResult(
+                False,
+                f"rate:min-gap({int(gap)}s<{int(MIN_SECONDS_BETWEEN_QUIZZES)}s)",
+            )
 
     hourly = _count_in_window(ps.quiz_timestamps, 3600, now)
     if hourly >= MAX_QUIZZES_PER_HOUR:
-        return GateResult(False, f"rate:hourly({hourly}>=6)")
+        return GateResult(False, f"rate:hourly({hourly}>={MAX_QUIZZES_PER_HOUR})")
 
     daily = _count_in_window(ps.quiz_timestamps, 86400, now)
     if daily >= MAX_QUIZZES_PER_DAY:
-        return GateResult(False, f"rate:daily({daily}>=20)")
+        return GateResult(False, f"rate:daily({daily}>={MAX_QUIZZES_PER_DAY})")
 
     if candidate_concept:
         last_same = ps.last_concept_at.get(candidate_concept, 0.0)
         if last_same > 0:
             since = now - last_same
             if since < MIN_SECONDS_BEFORE_SAME_CONCEPT:
-                return GateResult(False, f"rate:same-concept({int(since)}s<600s)")
+                return GateResult(
+                    False,
+                    f"rate:same-concept({int(since)}s<{int(MIN_SECONDS_BEFORE_SAME_CONCEPT)}s)",
+                )
 
     return GateResult(True, "ok")
 
