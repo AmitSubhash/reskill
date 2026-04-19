@@ -108,9 +108,9 @@ def _load_cache(cache_dir: Path) -> dict:
 
 
 def _save_cache(cache_dir: Path, data: dict) -> None:
-    path = cache_dir / "concepts.json"
+    from .persist import atomic_write_json
     try:
-        path.write_text(json.dumps(data, indent=2))
+        atomic_write_json(cache_dir / "concepts.json", data)
     except OSError:
         pass
 

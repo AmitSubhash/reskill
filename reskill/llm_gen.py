@@ -127,9 +127,9 @@ def _cached(cache_file: Path) -> Question | None:
 
 
 def _save(cache_file: Path, payload: dict) -> None:
+    from .persist import atomic_write_json
     try:
-        cache_file.parent.mkdir(parents=True, exist_ok=True)
-        cache_file.write_text(json.dumps(payload, indent=2))
+        atomic_write_json(cache_file, payload)
     except OSError:
         pass
 
@@ -240,13 +240,17 @@ def generate_from_code(
 
     prompt = _PROMPT_TEMPLATE.format(code=code[:4000], context=context[:500] or "(none)")
 
-    cmd = ["claude", "-p", prompt]
+    # Pass prompt on stdin (not argv) so:
+    #   (a) we don't hit MAX_ARG_STRLEN on long transcripts
+    #   (b) the transcript doesn't land in `ps` output / shell history
+    cmd = ["claude", "-p"]
     if model:
         cmd.extend(["--model", model])
 
     try:
         proc = subprocess.run(
             cmd,
+            input=prompt,
             capture_output=True,
             text=True,
             timeout=timeout_seconds,
@@ -258,11 +262,18 @@ def generate_from_code(
         return GenResult(None, f"failed to spawn claude: {exc}")
 
     if proc.returncode != 0:
-        return GenResult(
-            None,
-            f"claude exited {proc.returncode}: {proc.stderr[:200]}",
-            raw=proc.stdout,
-        )
+        # Classify common cases so the circuit-breaker can surface a
+        # useful reason on the idle card (see Prefetcher.last_error).
+        stderr_lower = proc.stderr.lower()
+        if "not authenticated" in stderr_lower or "login" in stderr_lower:
+            reason = "Claude CLI isn't logged in, run `claude login`"
+        elif "rate" in stderr_lower and "limit" in stderr_lower:
+            reason = "Claude API rate-limited, templates still active"
+        elif "network" in stderr_lower or "connect" in stderr_lower:
+            reason = "network error reaching Claude, templates still active"
+        else:
+            reason = f"claude -p exited {proc.returncode}: {proc.stderr[:200].strip()}"
+        return GenResult(None, reason, raw=proc.stdout)
 
     body = proc.stdout
     if _looks_like_refusal(body):
@@ -390,6 +401,10 @@ class Prefetcher:
         self._failure_threshold = failure_threshold
         self._cooldown_seconds = cooldown_seconds
         self._lock = Lock()
+        # Last non-OK reason from a generation attempt. Rendered on
+        # the idle card when the circuit is open so users know why
+        # LLM-gen is quiet instead of thinking the product's broken.
+        self.last_error: str | None = None
 
     def circuit_open(self) -> bool:
         """True while we're in the cooldown window after too many failures."""
@@ -446,11 +461,15 @@ class Prefetcher:
             self._pending_key = None
         if result.question is None:
             self._failures += 1
+            # Remember the most recent reason so the idle card can
+            # show "LLM-gen paused, rate-limited" instead of silence.
+            self.last_error = result.error
             if self._failures >= self._failure_threshold:
                 import time as _t
                 self._circuit_opened_at = _t.time()
         else:
             self._failures = 0
+            self.last_error = None
         return result
 
     def shutdown(self) -> None:

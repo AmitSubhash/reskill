@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-import json
 import time
 from dataclasses import asdict, dataclass, field
+from dataclasses import fields as dataclass_fields
 from datetime import date
 from pathlib import Path
+
+from .persist import atomic_write_json, filter_to_fields, load_json_or_quarantine
 
 STATE_DIR = Path.home() / ".reskill"
 STATE_FILE = STATE_DIR / "state.json"
@@ -47,12 +49,12 @@ class State:
 
 
 def load() -> State:
-    if STATE_FILE.exists():
-        try:
-            data = json.loads(STATE_FILE.read_text())
-            s = State(**data)
-        except (json.JSONDecodeError, TypeError):
-            s = State()
+    data = load_json_or_quarantine(STATE_FILE, label="state.json")
+    if data is not None:
+        # Filter out unknown keys so a downgrade (or a hand-edited file
+        # with a future field) doesn't TypeError us into a clean slate.
+        known = {f.name for f in dataclass_fields(State)}
+        s = State(**filter_to_fields(data, known))
     else:
         s = State()
 
@@ -96,8 +98,7 @@ def load() -> State:
 
 
 def save(s: State) -> None:
-    STATE_DIR.mkdir(exist_ok=True)
-    STATE_FILE.write_text(json.dumps(asdict(s), indent=2))
+    atomic_write_json(STATE_FILE, asdict(s))
 
 
 def record_answer(s: State, question_id: str, concept: str, correct: bool, base_xp: int = 10) -> int:

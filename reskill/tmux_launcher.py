@@ -25,7 +25,7 @@ import shutil
 import subprocess
 import uuid
 
-from .palette import ASH, BOLD, DARK_ASH, DIM, TEAL, paint
+from .palette import ASH, BOLD, DARK_ASH, DIM, ROSE, TEAL, paint
 
 DEFAULT_PANEL_COLS = 52
 
@@ -118,8 +118,7 @@ def launch(claude_args: list[str]) -> int:
 
     if not _have_tmux():
         # No tmux? On macOS we can still give the user the split-window
-        # experience by opening a second Terminal.app / iTerm2 window
-        # with the quiz pane.
+        # experience by opening a second Terminal.app / iTerm2 window.
         if _macos_spawn_quiz_window():
             print(
                 paint("  reSkill", TEAL, BOLD),
@@ -132,8 +131,31 @@ def launch(claude_args: list[str]) -> int:
             print(paint("  starting claude here now...", ASH, DIM))
             print()
             os.execvp("claude", ["claude", *claude_args])
-        _print_install_hint()
-        return 127
+
+        # Linux (or macOS where osascript failed): don't dead-end. Run
+        # claude anyway, just without the split. The user typed
+        # `reskill claude` and expects claude to start; not running it
+        # is the worst kind of silent failure. Point them at `reskill
+        # quiz-panel` so they can open the quiz in a second terminal.
+        print(
+            paint("  reSkill", TEAL, BOLD),
+            paint("running claude without the quiz pane", ASH),
+        )
+        print(
+            paint(
+                "  for the split-pane experience: install tmux, then "
+                "run `reskill claude` again.",
+                ASH, DIM,
+            )
+        )
+        print(
+            paint(
+                "  or open a second terminal and run `reskill quiz-panel`.",
+                ASH, DIM,
+            )
+        )
+        print()
+        os.execvp("claude", ["claude", *claude_args])
 
     session = f"reskill-{uuid.uuid4().hex[:8]}"
     panel_cols = _panel_cols_from_term()
@@ -219,7 +241,26 @@ def launch(claude_args: list[str]) -> int:
         result = subprocess.run(["tmux", "attach", "-t", session])
         return result.returncode
     except subprocess.CalledProcessError as exc:
-        print(paint(f"  tmux failed: {exc}", ASH))
+        if isinstance(exc.cmd, (list, tuple)):
+            cmd = " ".join(str(a) for a in exc.cmd)
+        else:
+            cmd = str(exc.cmd)
+        print(paint(f"  tmux split failed (exit {exc.returncode})", ROSE, BOLD))
+        print(paint(f"    command: {cmd}", ASH, DIM))
+        print(
+            paint(
+                "  if tmux < 3.0, 'pane-border-lines' is unsupported. "
+                "upgrade with `brew install tmux` or on linux your "
+                "distro's package manager.",
+                ASH, DIM,
+            )
+        )
+        print(
+            paint(
+                "  fallback: open a second terminal and run `reskill quiz-panel`.",
+                ASH, DIM,
+            )
+        )
         return 1
     except FileNotFoundError:
         _print_install_hint()

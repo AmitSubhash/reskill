@@ -171,14 +171,29 @@ def _restore_tty(saved: list[int]) -> None:
     termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, saved)  # type: ignore[arg-type]
 
 
+class _DeadTTY(Exception):
+    """Raised by _read_key when stdin is closed (tmux pane destroyed,
+    SSH session dropped). Catching lets the run loop exit cleanly
+    instead of spinning in a tight poll, which was a latent CPU hog."""
+
+
 def _read_key(timeout: float) -> bytes | None:
-    ready, _, _ = select.select([sys.stdin], [], [], timeout)
+    try:
+        ready, _, _ = select.select([sys.stdin], [], [], timeout)
+    except (OSError, ValueError):
+        # select raises ValueError when fd is closed; OSError on other
+        # kernel-level failures. Either way, stdin is gone.
+        raise _DeadTTY()
     if not ready:
         return None
     try:
-        return os.read(sys.stdin.fileno(), 8)
+        data = os.read(sys.stdin.fileno(), 8)
     except OSError:
-        return None
+        raise _DeadTTY()
+    if data == b"":
+        # EOF. Terminal/pipe closed.
+        raise _DeadTTY()
+    return data
 
 
 # ───────── Session counters (live for one quiz-panel run) ─────────
@@ -250,7 +265,9 @@ def _render_footer(items: list[tuple[str, str]]) -> str:
 # ───────── Cards ─────────
 
 
-def _idle_signature_preview(session: SessionCounters) -> tuple:
+def _idle_signature_preview(
+    session: SessionCounters, prefetch: Prefetcher | None = None,
+) -> tuple:
     """Cheap signature of idle-card visible data.
 
     Computes everything the full render would show so the run loop can
@@ -263,16 +280,34 @@ def _idle_signature_preview(session: SessionCounters) -> tuple:
     due_n, new_n = scheduler.concepts_ready(
         live_text or "", state, set(state.seen_questions)
     )
+    gen_state = _gen_banner(prefetch)
     return (
         "idle",
         session.served, session.correct, session.wrong, session.skipped,
         state.streak, state.correct_today, state.daily_goal,
-        due_n, new_n, source,
+        due_n, new_n, source, gen_state,
     )
 
 
+def _gen_banner(prefetch: Prefetcher | None) -> str | None:
+    """Message to render when the LLM-gen circuit is open.
+
+    Returns None when everything's fine. Returns a short label when
+    gen is paused so the idle card can tell the user why generated
+    questions have gone quiet instead of them assuming we're broken.
+    """
+    if prefetch is None or not prefetch.circuit_open():
+        return None
+    reason = prefetch.last_error or "too many failures"
+    # Trim to something that fits on a narrow pane.
+    short = reason.split(",")[0].strip()[:64]
+    return f"LLM-gen paused, {short}" if short else "LLM-gen paused"
+
+
 def _render_idle_card(
-    session: SessionCounters, _paced: pacing.PacingState
+    session: SessionCounters,
+    _paced: pacing.PacingState,
+    prefetch: Prefetcher | None = None,
 ) -> tuple:
     """Shown when Claude is not currently thinking.
 
@@ -289,11 +324,12 @@ def _render_idle_card(
         live_text or "", state, set(state.seen_questions)
     )
 
+    gen_state = _gen_banner(prefetch)
     signature = (
         "idle",
         session.served, session.correct, session.wrong, session.skipped,
         state.streak, state.correct_today, state.daily_goal,
-        due_n, new_n, source,
+        due_n, new_n, source, gen_state,
     )
 
     _set_pane_border("idle")
@@ -313,6 +349,9 @@ def _render_idle_card(
         ),
         "  " + paint(f"{due_n} due \u00b7 {new_n} new", ASH, DIM),
     ]
+    if gen_state:
+        lines.append("")
+        lines.append("  " + paint(gen_state, GOLD, DIM))
     if source != "hooks":
         lines.append("")
         lines.append(
@@ -803,7 +842,7 @@ def run() -> int:
                 )
             else:
                 if last_render != "idle":
-                    last_idle_signature = _render_idle_card(session, paced)
+                    last_idle_signature = _render_idle_card(session, paced, prefetch)
                     last_render = "idle"
                 key = _read_key(timeout=1.0)
                 if key and key[:1] == b"q":
@@ -813,10 +852,15 @@ def run() -> int:
                 # re-render when the visible data changed. Kills the 3s
                 # full-clear flicker that made the pane feel broken.
                 if key is None and int(time.time()) % 10 == 0:
-                    new_sig = _idle_signature_preview(session)
+                    new_sig = _idle_signature_preview(session, prefetch)
                     if new_sig != last_idle_signature:
-                        last_idle_signature = _render_idle_card(session, paced)
+                        last_idle_signature = _render_idle_card(session, paced, prefetch)
     except KeyboardInterrupt:
+        return 0
+    except _DeadTTY:
+        # tmux pane destroyed, ssh dropped, shell closed. Exit cleanly
+        # instead of spinning on a dead fd. No message (nothing to
+        # render to anyway).
         return 0
     finally:
         prefetch.shutdown()

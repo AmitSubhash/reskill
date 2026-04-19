@@ -12,7 +12,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from .palette import ASH, BOLD, DARK_ASH, DIM, SAGE, TEAL, paint
+from .palette import ASH, BOLD, DARK_ASH, DIM, ROSE, SAGE, TEAL, paint
 
 SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
 HOOK_MARKER = "reskill log-session"
@@ -68,11 +68,43 @@ def _load_settings() -> dict:
         return {}
     try:
         return json.loads(SETTINGS_PATH.read_text())
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as exc:
+        backup = SETTINGS_PATH.with_suffix(".json.reskill-bak")
         print(
-            paint("  reskill: ~/.claude/settings.json is not valid JSON", ASH),
+            paint(
+                f"  reskill: can't parse {SETTINGS_PATH}", ROSE, BOLD,
+            ),
             file=sys.stderr,
         )
+        print(
+            paint(f"    {exc.__class__.__name__}: {exc}", ASH),
+            file=sys.stderr,
+        )
+        if backup.exists():
+            print(
+                paint(
+                    f"  a reskill backup exists at {backup}",
+                    ASH, DIM,
+                ),
+                file=sys.stderr,
+            )
+            print(
+                paint(
+                    "  to restore it:  ", ASH, DIM,
+                )
+                + paint(
+                    f"cp {backup} {SETTINGS_PATH}", TEAL, BOLD,
+                ),
+                file=sys.stderr,
+            )
+        else:
+            print(
+                paint(
+                    "  fix the JSON manually, then re-run `reskill install`.",
+                    ASH, DIM,
+                ),
+                file=sys.stderr,
+            )
         sys.exit(1)
 
 
@@ -262,9 +294,18 @@ def install(with_statusline: bool = True, compose_statusline: bool = True) -> in
                 "command": reskill_cmd,
                 "refreshInterval": 2,
                 "padding": 2,
+                # Explicit ownership marker -- uninstall checks this
+                # before deleting so a user's custom line that happens
+                # to mention "reskill statusline" (e.g. in a comment)
+                # is never wiped.
+                "_reskill_owned": True,
             }
             print(paint("  statusLine configured (reskill only)", SAGE, BOLD))
-        elif WRAPPER_MARKER in existing_cmd or "reskill statusline" in existing_cmd:
+        elif (
+            existing_sl.get("_reskill_owned") is True
+            or WRAPPER_MARKER in existing_cmd
+            or existing_cmd.strip() == reskill_cmd
+        ):
             # Already wrapped or already us.
             pass
         elif compose_statusline:
@@ -274,6 +315,7 @@ def install(with_statusline: bool = True, compose_statusline: bool = True) -> in
                 "command": f"bash {WRAPPER_SCRIPT_PATH}",
                 "refreshInterval": 2,
                 "padding": 2,
+                "_reskill_owned": True,
             }
             print(
                 paint("  statusLine composed", SAGE, BOLD),
@@ -310,7 +352,14 @@ def uninstall() -> int:
     sl = settings.get("statusLine", {})
     if isinstance(sl, dict):
         cmd = sl.get("command", "")
-        if "reskill statusline" in cmd:
+        # Only delete statusLine entries we know we own. The
+        # `_reskill_owned` marker is our explicit consent flag; the
+        # exact-match check is for older installs (pre-marker) that
+        # had nothing else but our command.
+        reskill_cmd = f"{_find_reskill_binary()} statusline"
+        owned = sl.get("_reskill_owned") is True
+        legacy_owned = cmd.strip() == reskill_cmd
+        if owned or legacy_owned:
             del settings["statusLine"]
             removed = True
         elif WRAPPER_MARKER in cmd or str(WRAPPER_SCRIPT_PATH) in cmd:

@@ -16,10 +16,11 @@ The gate is `can_fire_now(...)`. Every other function here supports it.
 
 from __future__ import annotations
 
-import json
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from .persist import atomic_write_json, load_json_or_quarantine
 
 STATE_DIR = Path.home() / ".reskill" / "state"
 PACING_FILE = STATE_DIR / "pacing.json"
@@ -74,11 +75,8 @@ MIN_SECONDS_BEFORE_SAME_CONCEPT = _env_float(
 
 
 def load() -> PacingState:
-    if not PACING_FILE.exists():
-        return PacingState()
-    try:
-        data = json.loads(PACING_FILE.read_text())
-    except (OSError, json.JSONDecodeError):
+    data = load_json_or_quarantine(PACING_FILE, label="pacing.json")
+    if data is None:
         return PacingState()
     ps = PacingState(
         thinking_started_at=data.get("thinking_started_at", 0.0),
@@ -91,14 +89,13 @@ def load() -> PacingState:
 
 
 def save(ps: PacingState) -> None:
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
     try:
-        PACING_FILE.write_text(json.dumps({
+        atomic_write_json(PACING_FILE, {
             "thinking_started_at": ps.thinking_started_at,
             "last_quiz_finished_at": ps.last_quiz_finished_at,
             "last_concept_at": ps.last_concept_at,
             "quiz_timestamps": ps.quiz_timestamps,
-        }, indent=2))
+        })
     except OSError:
         pass
 
