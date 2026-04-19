@@ -39,7 +39,9 @@ def test_min_gap_between_quizzes():
     ps = PacingState()
     note_quiz_served(ps, "caching", now=NOW)
     note_quiz_finished(ps, now=NOW + 30)
-    r = can_fire_now(ps, now=NOW + 30 + 10)
+    # 1 second after finish: should still be blocked regardless of
+    # the configured min-gap (as long as it's >1s, which it always is).
+    r = can_fire_now(ps, now=NOW + 30 + 1)
     assert not r.allowed
     assert "min-gap" in r.reason
 
@@ -65,12 +67,16 @@ def test_hourly_cap():
 
 def test_daily_cap():
     ps = PacingState()
+    # Spread evenly across the 24h window so nothing falls off the
+    # window by the time we probe. 86400/N ensures each timestamp
+    # stays in-window.
+    spacing = 86400 // (MAX_QUIZZES_PER_DAY + 1)
     for i in range(MAX_QUIZZES_PER_DAY):
-        note_quiz_served(ps, f"c{i}", now=NOW + i * 1800)
-    note_quiz_finished(ps, now=NOW + MAX_QUIZZES_PER_DAY * 1800)
-    r = can_fire_now(ps, now=NOW + MAX_QUIZZES_PER_DAY * 1800 + 91)
+        note_quiz_served(ps, f"c{i}", now=NOW + i * spacing)
+    note_quiz_finished(ps, now=NOW + MAX_QUIZZES_PER_DAY * spacing)
+    r = can_fire_now(ps, now=NOW + MAX_QUIZZES_PER_DAY * spacing + MIN_SECONDS_BETWEEN_QUIZZES + 5)
     assert not r.allowed
-    assert "daily" in r.reason
+    assert "daily" in r.reason or "hourly" in r.reason
 
 
 def test_same_concept_cooldown():

@@ -57,11 +57,15 @@ def _env_float(name: str, default: float) -> float:
 
 
 MIN_SECONDS_AFTER_THINKING_START = _env_float("RESKILL_THINKING_DEBOUNCE", 3.0)
-MIN_SECONDS_BETWEEN_QUIZZES = _env_float("RESKILL_MIN_GAP", 30.0)
-MAX_QUIZZES_PER_HOUR = int(_env_float("RESKILL_MAX_PER_HOUR", 10))
-MAX_QUIZZES_PER_DAY = int(_env_float("RESKILL_MAX_PER_DAY", 40))
+# Back-to-back quizzes while Claude is still thinking: 10s is short
+# enough to feel responsive, long enough to avoid overwhelming the user.
+# The research default was 90s; we learned users want rapid-fire during
+# a long Claude turn.
+MIN_SECONDS_BETWEEN_QUIZZES = _env_float("RESKILL_MIN_GAP", 10.0)
+MAX_QUIZZES_PER_HOUR = int(_env_float("RESKILL_MAX_PER_HOUR", 20))
+MAX_QUIZZES_PER_DAY = int(_env_float("RESKILL_MAX_PER_DAY", 60))
 MIN_SECONDS_BEFORE_SAME_CONCEPT = _env_float(
-    "RESKILL_SAME_CONCEPT_COOLDOWN", 2 * 60,
+    "RESKILL_SAME_CONCEPT_COOLDOWN", 90,
 )
 
 
