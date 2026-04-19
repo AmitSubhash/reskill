@@ -1969,6 +1969,336 @@ TEMPLATE_BANK: dict[str, list[Question]] = {
             ),
         ),
     ],
+    "git_reset_hard_vs_revert": [
+        _q(
+            concept="git",
+            format="tradeoff",
+            prompt=(
+                "A bad commit `abc123` was pushed to `main` an hour ago and three "
+                "teammates have already pulled it. Which recovery is safer, and why?"
+            ),
+            code=(
+                "# Option A:\n"
+                "git reset --hard HEAD~1\n"
+                "git push --force origin main\n\n"
+                "# Option B:\n"
+                "git revert abc123\n"
+                "git push origin main"
+            ),
+            opts=[
+                ("`git reset --hard HEAD~1 && git push --force` erases the bad commit from history so nobody else can see it", False),
+                ("`git revert <sha>` adds a new commit that inverts the bad change; history stays linear and pulls stay safe", True),
+                ("Both have identical effects on collaborators; the choice is purely a matter of stylistic preference here", False),
+                ("`git revert` requires the commit to be unsigned, otherwise it silently falls back to a reset operation", False),
+            ],
+            explanation=(
+                "Mental model: once a commit is pushed and pulled, history "
+                "becomes public. `reset --hard + --force` rewrites that "
+                "history, so teammates' branches diverge and their next "
+                "`git pull` creates a merge mess (or worse, resurrects the "
+                "bad commit). `git revert` adds a NEW commit whose diff is "
+                "the inverse of the bad one. Everyone fast-forwards cleanly. "
+                "Rule: rewrite only what's still private; revert what's "
+                "already shared."
+            ),
+        ),
+    ],
+    "git_bisect_flake": [
+        _q(
+            concept="git",
+            format="scenario",
+            prompt=(
+                "You're bisecting a perf regression. The test fails ~40% of the "
+                "time even on known-good commits (it's flaky, not broken). "
+                "How do you set `good`/`bad` without sending bisect off a cliff?"
+            ),
+            code=(
+                "git bisect start\n"
+                "git bisect bad HEAD\n"
+                "git bisect good v1.4.0\n"
+                "# test at midpoint fails once, passes on retry -- now what?"
+            ),
+            opts=[
+                ("Mark the flaky commit as `good`; bisect treats any non-failing run as good and will still converge faster", False),
+                ("Run the test N times at each step and mark `bad` only on consistent failure, or `git bisect skip` if mixed", True),
+                ("Mark the flaky commit as `bad`; one failure anywhere proves the regression is already present on that sha", False),
+                ("Disable bisect's binary search with `--first-parent`; flakes break the invariant linear-search assumes", False),
+            ],
+            explanation=(
+                "Bisect assumes a monotonic good-then-bad boundary. A flake "
+                "violates that assumption: a single failure on a truly-good "
+                "commit poisons the whole search, because bisect will look "
+                "for the regression in the wrong half. Defend the invariant "
+                "by amplifying signal (run the test 5-10x per step; only "
+                "call `bad` on consistent failure) and use `git bisect skip` "
+                "when you honestly can't tell. Skip defers the decision and "
+                "bisects around the ambiguous commit."
+            ),
+        ),
+    ],
+    "sql_functional_index": [
+        _q(
+            concept="sql",
+            format="why",
+            prompt=(
+                "You added `CREATE INDEX ON users(email);` but `EXPLAIN` shows "
+                "a Seq Scan for the query below. Why is the B-tree index skipped?"
+            ),
+            code=(
+                "CREATE INDEX users_email_idx ON users(email);\n"
+                "SELECT id FROM users WHERE LOWER(email) = $1;"
+            ),
+            opts=[
+                ("The planner assumes `LOWER(email)` is non-deterministic, so it refuses to use any B-tree index on the column", False),
+                ("B-tree indexes store raw `email` values; `LOWER(email)` is a different expression, so an index on `email` cannot match", True),
+                ("`WHERE LOWER(email) = ?` causes Postgres to implicitly cast the column to text, which disables the index scan", False),
+                ("B-tree indexes only work for equality on integers; for text columns you need a GIN or hash index instead", False),
+            ],
+            explanation=(
+                "Mental model: an index is a sorted map from stored-value "
+                "to row-id. The planner can only use it when the WHERE "
+                "predicate is shaped like `indexed_expression = ?`. "
+                "`LOWER(email)` isn't stored anywhere, so the index is "
+                "unusable. Two fixes: (1) store the column already "
+                "lowercased, or (2) create a functional index: "
+                "`CREATE INDEX ON users(LOWER(email));`. Postgres will "
+                "then match the expression and use the index."
+            ),
+        ),
+    ],
+    "explain_analyze_nested_loop": [
+        _q(
+            concept="sql",
+            format="scenario",
+            prompt=(
+                "Same join, two plans. The nested loop runs in 8s, the hash "
+                "join in 90ms. What's the right lever to pull so the planner "
+                "picks the hash join next time?"
+            ),
+            code=(
+                "-- EXPLAIN ANALYZE output (abridged):\n"
+                "Nested Loop  (rows=1 width=..) (actual rows=420000 loops=1)\n"
+                "  ->  Seq Scan on orders  (rows=1)  (actual rows=420000)\n"
+                "  ->  Index Scan on users (rows=1 loops=420000)"
+            ),
+            opts=[
+                ("Raise `work_mem` so the hash table fits in memory; nested loop spilling to disk is the usual cause of slowness", False),
+                ("Planner underestimated rows and picked nested loop; run ANALYZE (or fix stats / add an index) so it picks hash join", True),
+                ("Nested loop is always faster than hash join for small inputs; leave the plan alone and tune the buffer cache", False),
+                ("Rewrite the query with a LATERAL join; the planner refuses hash join unless the outer input is materialized first", False),
+            ],
+            explanation=(
+                "Mental model: nested loop is `for x in outer: probe(x)`. "
+                "It wins when the outer side is genuinely tiny. Here the "
+                "planner estimated `rows=1` but actually got 420k -- a "
+                "400000x stats error. That's the signal in EXPLAIN "
+                "ANALYZE: compare `rows=` (estimate) to `actual rows=`. "
+                "When estimates are wildly off, the lever is statistics, "
+                "not memory: run `ANALYZE`, raise `default_statistics_"
+                "target`, or add an index that gives the planner a better "
+                "selectivity estimate."
+            ),
+        ),
+    ],
+    "cache_control_user_data": [
+        _q(
+            concept="http",
+            format="tradeoff",
+            prompt=(
+                "Your `/me` endpoint returns the logged-in user's profile. "
+                "Which `Cache-Control` value belongs on the response, and "
+                "what's the difference between the three plausible choices?"
+            ),
+            code=(
+                "HTTP/1.1 200 OK\n"
+                "Content-Type: application/json\n"
+                "Cache-Control: ???\n"
+                "\n"
+                "{\"id\": 42, \"email\": \"alice@example.com\"}"
+            ),
+            opts=[
+                ("`private` alone is enough: it stops shared caches, and the browser will refetch on every navigation anyway", False),
+                ("`no-cache` means 'never cache'; use it so the response isn't written to disk or proxy caches at all", False),
+                ("`no-store` forbids any caching; `no-cache` allows storage but forces revalidation; `private` only blocks shared caches", True),
+                ("`no-store` and `no-cache` are synonyms in HTTP/1.1; pick `private` for readability, the effect is the same", False),
+            ],
+            explanation=(
+                "Mental model: three different questions. `no-store` = "
+                "'don't write this to disk anywhere' (the strongest, right "
+                "for sensitive PII / auth tokens). `no-cache` = 'you may "
+                "store it, but revalidate with the origin before reusing' "
+                "(good for frequently-changing but non-secret data). "
+                "`private` = 'shared caches (CDN, proxy) must not store "
+                "this, but the user's own browser may'. For user-specific "
+                "data you almost always want `private, no-store` or at "
+                "least `private, no-cache`."
+            ),
+        ),
+    ],
+    "cors_wildcard_credentials": [
+        _q(
+            concept="http",
+            format="gotcha",
+            prompt=(
+                "Your frontend sends `fetch('/api', {credentials: 'include'})` "
+                "so the session cookie rides along. The server replies with "
+                "the headers below and the browser blocks the response. Why?"
+            ),
+            code=(
+                "Access-Control-Allow-Origin: *\n"
+                "Access-Control-Allow-Credentials: true\n"
+                "Set-Cookie: session=...; HttpOnly; Secure"
+            ),
+            opts=[
+                ("Browsers silently drop the `Authorization` header but keep cookies; fine for session auth, broken for bearer tokens", False),
+                ("With `credentials: 'include'` the browser rejects `Access-Control-Allow-Origin: *`; echo back the request Origin", True),
+                ("`Allow-Origin: *` works with credentials as long as `Allow-Credentials: true` is also set on the response", False),
+                ("CORS preflight ignores `Allow-Origin: *` on OPTIONS; only the actual request checks it, so the fetch succeeds", False),
+            ],
+            explanation=(
+                "Mental model: the wildcard `*` is the 'I trust everyone' "
+                "origin. Combining it with credentials would let any site "
+                "on the web read the victim's authenticated response, so "
+                "the spec forbids it: when `Allow-Credentials: true`, "
+                "`Allow-Origin` MUST be a concrete origin. The fix is to "
+                "read the `Origin` request header, validate it against an "
+                "allowlist, and echo it back verbatim (plus "
+                "`Vary: Origin` so caches don't mix responses across "
+                "origins)."
+            ),
+        ),
+    ],
+    "shell_ifs_filename_spaces": [
+        _q(
+            concept="shell",
+            format="bug",
+            prompt=(
+                "The loop below is supposed to print each log filename on "
+                "its own line. It breaks on `my report.log` (prints 'my' "
+                "and 'report.log' separately). What's the real fix?"
+            ),
+            code=(
+                "for f in $(ls *.log); do\n"
+                "    echo \"$f\"\n"
+                "done"
+            ),
+            opts=[
+                ("Quote the glob: `for f in \"*.log\"`; the quotes tell bash to treat each filename as a single word", False),
+                ("Replace `for` with `while IFS= read -r f`, feeding filenames NUL-separated via `find -print0 | ...`", True),
+                ("Set `IFS=$'\\n'` before the loop; newlines are the only separator bash respects for filename iteration", False),
+                ("Use `for f in $(ls *.log)`; command substitution preserves filename boundaries better than a raw glob", False),
+            ],
+            explanation=(
+                "Mental model: `$(ls ...)` returns a single string that "
+                "bash splits on IFS (default: space/tab/newline), so any "
+                "filename with whitespace is shredded. Two good patterns: "
+                "(1) iterate the glob directly, `for f in *.log; do ...`, "
+                "which preserves filename boundaries; (2) for `find` "
+                "output use the robust NUL-safe read: "
+                "`while IFS= read -r -d '' f; do ...; done < <(find ... "
+                "-print0)`. Never parse `ls`."
+            ),
+        ),
+    ],
+    "shell_at_vs_star_forwarding": [
+        _q(
+            concept="shell",
+            format="gotcha",
+            prompt=(
+                "The wrapper script below is invoked as `./run.sh \"a b\" c`. "
+                "The child program receives THREE args: `a`, `b`, `c`. "
+                "Why, and which form forwards correctly?"
+            ),
+            code=(
+                "#!/usr/bin/env bash\n"
+                "# run.sh\n"
+                "exec my-tool $*"
+            ),
+            opts=[
+                ("`\"$@\"` expands to one quoted word per argument; `\"$*\"` joins them into a single word split by IFS", True),
+                ("`$@` and `$*` behave identically when quoted; the difference only shows up inside arithmetic expansion", False),
+                ("`\"$*\"` preserves argument boundaries; `\"$@\"` flattens everything into one string for the child process", False),
+                ("`$@` without quotes is the safe form; quoting it is what triggers the word-splitting bug on filenames", False),
+            ],
+            explanation=(
+                "Mental model: unquoted `$*` and unquoted `$@` both word-"
+                "split, which is why `\"a b\"` becomes two args. QUOTED "
+                "forms diverge: `\"$*\"` is ONE string with args joined by "
+                "the first char of IFS (space by default); `\"$@\"` "
+                "expands to N separate quoted words, preserving boundaries "
+                "exactly as received. In wrapper scripts, always write "
+                "`exec my-tool \"$@\"`. Memorize: 'at' means 'each arg "
+                "atomically'."
+            ),
+        ),
+    ],
+    "docker_layer_cache_copy_order": [
+        _q(
+            concept="docker",
+            format="refactor",
+            prompt=(
+                "Every one-line source edit triggers a full `pip install` "
+                "rebuild (2+ minutes). The Dockerfile is below. What's "
+                "the minimal reorder that restores layer caching?"
+            ),
+            code=(
+                "FROM python:3.12-slim\n"
+                "WORKDIR /app\n"
+                "COPY . .\n"
+                "RUN pip install -r requirements.txt\n"
+                "CMD [\"python\", \"app.py\"]"
+            ),
+            opts=[
+                ("`COPY . .` followed by `pip install` rebuilds deps on every source edit; copy `requirements.txt` first, install, then `COPY . .`", True),
+                ("Move `pip install` into a RUN layer before the COPY; Docker caches RUN steps regardless of any files on disk", False),
+                ("Add `--no-cache` to `pip install` so the cache key changes only when `requirements.txt` changes on the host", False),
+                ("Switch the base image to `python:slim`; the smaller layer size makes cache invalidation cheap enough to ignore", False),
+            ],
+            explanation=(
+                "Mental model: Docker invalidates a layer and every layer "
+                "below it when the step's inputs change. `COPY . .` "
+                "depends on ALL source files, so any edit busts the cache "
+                "for `pip install` too. Order steps from least-to-most "
+                "frequently-changing: copy `requirements.txt`, run `pip "
+                "install`, THEN `COPY . .`. Now code edits only invalidate "
+                "the final (cheap) copy layer, and dep installs are cached "
+                "until requirements actually change."
+            ),
+        ),
+    ],
+    "pg_pool_exhaustion_pgbouncer": [
+        _q(
+            concept="postgres",
+            format="scenario",
+            prompt=(
+                "A Python web app on Postgres shows random p99 latency "
+                "spikes during traffic bursts. Logs show `QueuePool limit "
+                "... overflow` warnings. Postgres CPU is fine. Right lever?"
+            ),
+            code=(
+                "# app pool config\n"
+                "engine = create_engine(DB_URL, pool_size=20, max_overflow=10)\n"
+                "# 40 app workers, each holds an idle backend between requests"
+            ),
+            opts=[
+                ("Raise Postgres `max_connections` to 2x your pool size; bursts fail because the server refuses new TCP sockets", False),
+                ("Front Postgres with pgbouncer in transaction mode; backends are released per-transaction, smoothing burst load", True),
+                ("Switch the app driver to session mode in pgbouncer; session pooling keeps prepared statements across requests", False),
+                ("Increase the app's pool `max_overflow`; p99 spikes mean workers wait for a free slot in the client-side pool", False),
+            ],
+            explanation=(
+                "Mental model: Postgres backends are expensive (10-20MB "
+                "each) and each client pool hoards them. 40 workers x 20 "
+                "connections pins 800 backends, most idle. pgbouncer in "
+                "TRANSACTION mode multiplexes thousands of client "
+                "connections onto a small server-side pool, returning the "
+                "backend after each `COMMIT`. SESSION mode holds the "
+                "backend for the whole client connection -- essentially "
+                "what you already have. Raising `max_connections` just "
+                "moves the bottleneck to RAM."
+            ),
+        ),
+    ],
 
 }
 
