@@ -9,6 +9,7 @@ Usage:
   reskill doctor               diagnose why reskill isn't behaving
   reskill topics               see every concept + your mastery progress
   reskill gen [sha]            LLM-generate a quiz from a real commit diff
+  reskill gen --live           LLM-generate from the current Claude transcript
   reskill install              install the Claude Code hooks (PreToolUse,
                                PostToolUse, Stop) that signal the quiz pane
   reskill uninstall            remove the hooks
@@ -217,8 +218,11 @@ def main(argv: list[str] | None = None) -> int:
         return topics_cmd.run()
     if cmd == "gen":
         from . import gen_cmd
-        commit = rest[0] if rest and not rest[0].startswith("--") else None
-        return gen_cmd.run(commit=commit)
+        live = "--live" in rest
+        commit = next(
+            (a for a in rest if not a.startswith("--")), None,
+        )
+        return gen_cmd.run(commit=commit, live=live)
     if cmd == "install":
         from . import hookinstall
         return hookinstall.install()

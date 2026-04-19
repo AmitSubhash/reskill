@@ -16,10 +16,11 @@ import time
 import tty
 
 from . import state as state_mod
+from .activity import recent_transcript_text
 from .git_diffs import fetch_commits, project_root
 from .inline_box import render_correct_flash, render_question, render_wrong_reveal
-from .llm_gen import generate_from_commit
-from .palette import ASH, BOLD, DARK_ASH, DIM, GOLD, SAGE, TEAL, paint
+from .llm_gen import generate_from_code, generate_from_commit, wrap_code_for_prompt
+from .palette import ASH, BOLD, DARK_ASH, DIM, GOLD, TEAL, paint
 
 
 def _set_cbreak() -> list[int]:
@@ -43,38 +44,65 @@ def _read_key(timeout: float) -> bytes | None:
         return None
 
 
-def run(commit: str | None = None, timeout_seconds: float = 45.0) -> int:
-    """Generate one question from a specific commit (or latest) + run it.
+def run(
+    commit: str | None = None,
+    live: bool = False,
+    timeout_seconds: float = 45.0,
+) -> int:
+    """Generate one question from a specific commit, the latest commit,
+    or the live Claude transcript, then run it.
 
     Parameters
     ----------
     commit : str or None
-        Git ref. If None, use the most recent commit in the cwd.
+        Git ref. If None and live is False, use the most recent commit.
+    live : bool
+        If True, use the tail of the current ~/.claude/projects transcript
+        instead of a commit. Tightest feedback loop for testing the prompt.
     timeout_seconds : float
         How long to wait for the user to answer.
     """
-    root = project_root()
-    if not root:
-        print(paint("  not a git repo -- nothing to generate from", ASH))
-        return 1
-
-    if commit is None:
-        recent = fetch_commits("14d", cwd=root, limit=1)
-        if not recent:
-            print(paint("  no commits in the last 14 days", ASH))
+    if live:
+        import os as _os
+        text = recent_transcript_text(cwd=_os.getcwd())
+        if not text:
+            print(paint("  no recent transcript -- start a claude session first", ASH))
             return 2
-        commit = recent[0].sha
+        print()
+        print(
+            paint("  reSkill", TEAL, BOLD)
+            + paint("  generating from live transcript", ASH, DIM)
+        )
+        print(paint("  asking claude -- this can take a few seconds...", ASH, DIM))
+        print()
+        result = generate_from_code(
+            code=wrap_code_for_prompt(text),
+            context="live claude transcript tail",
+            timeout_seconds=timeout_seconds,
+        )
+    else:
+        root = project_root()
+        if not root:
+            print(paint("  not a git repo -- nothing to generate from", ASH))
+            return 1
 
-    print()
-    print(
-        paint("  reSkill", TEAL, BOLD)
-        + paint("  generating from commit ", ASH, DIM)
-        + paint(commit[:8], TEAL)
-    )
-    print(paint("  asking claude -- this can take a few seconds...", ASH, DIM))
-    print()
+        if commit is None:
+            recent = fetch_commits("14d", cwd=root, limit=1)
+            if not recent:
+                print(paint("  no commits in the last 14 days", ASH))
+                return 2
+            commit = recent[0].sha
 
-    result = generate_from_commit(commit, cwd=root, timeout_seconds=timeout_seconds)
+        print()
+        print(
+            paint("  reSkill", TEAL, BOLD)
+            + paint("  generating from commit ", ASH, DIM)
+            + paint(commit[:8], TEAL)
+        )
+        print(paint("  asking claude -- this can take a few seconds...", ASH, DIM))
+        print()
+
+        result = generate_from_commit(commit, cwd=root, timeout_seconds=timeout_seconds)
     if result.question is None:
         print(paint(f"  generation failed: {result.error}", ASH))
         if result.raw:
