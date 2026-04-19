@@ -191,7 +191,20 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_session(rest)
     if cmd == "next":
         from . import next_cmd
-        return next_cmd.run()
+        # Accept --concept X or --concept=X
+        concept: str | None = None
+        i = 0
+        while i < len(rest):
+            if rest[i] == "--concept" and i + 1 < len(rest):
+                concept = rest[i + 1]
+                i += 2
+                continue
+            if rest[i].startswith("--concept="):
+                concept = rest[i].split("=", 1)[1]
+                i += 1
+                continue
+            i += 1
+        return next_cmd.run(concept=concept)
     if cmd == "review":
         from . import review_cmd
         return review_cmd.run()

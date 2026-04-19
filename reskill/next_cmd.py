@@ -45,13 +45,16 @@ def _read_key(timeout: float | None = None) -> bytes | None:
         return None
 
 
-def run(timeout_seconds: float = 45.0) -> int:
+def run(timeout_seconds: float = 45.0, concept: str | None = None) -> int:
     """Show one question, wait for an answer, reveal, exit.
 
     Parameters
     ----------
     timeout_seconds : float
         How long to wait for an answer before auto-skipping.
+    concept : str or None
+        If given, pick a question from this concept/pattern key only.
+        Matches substring (case-insensitive) against concept names.
 
     Returns
     -------
@@ -60,19 +63,40 @@ def run(timeout_seconds: float = 45.0) -> int:
     """
     state = state_mod.load()
     project = project_root()
-    live_text = recent_transcript_text(cwd=os.getcwd() or project)
-    commit_text = ""
-    if project:
-        commits = fetch_commits("7d", cwd=project, limit=10)
-        commit_text = "\n".join(
-            c.subject + "\n" + "\n".join(c.added_lines[:60]) for c in commits
+    pick = None
+
+    if concept:
+        # Target a specific concept. Match pattern key substring, then
+        # fall back to semantic concept label substring.
+        from .question import TEMPLATE_BANK
+        import random as _random
+        needle = concept.lower()
+        matches = [
+            (k, _random.choice(v))
+            for k, v in TEMPLATE_BANK.items()
+            if needle in k.lower() or (v and needle in v[0].concept.lower())
+        ]
+        if matches:
+            _, q = _random.choice(matches)
+            pick = scheduler.Pick(question=q, concept=q.concept, source="manual")
+        else:
+            print(paint(f"  no concept matches '{concept}'", ASH))
+            print(paint("  see available: `reskill topics`", ASH, DIM))
+            return 1
+    else:
+        live_text = recent_transcript_text(cwd=os.getcwd() or project)
+        commit_text = ""
+        if project:
+            commits = fetch_commits("7d", cwd=project, limit=10)
+            commit_text = "\n".join(
+                c.subject + "\n" + "\n".join(c.added_lines[:60]) for c in commits
+            )
+        pick = scheduler.choose(
+            live_text=live_text or "",
+            commit_text=commit_text,
+            state=state,
+            seen_ids=set(state.seen_questions),
         )
-    pick = scheduler.choose(
-        live_text=live_text or "",
-        commit_text=commit_text,
-        state=state,
-        seen_ids=set(state.seen_questions),
-    )
     if pick is None:
         print(paint("  no question available right now", ASH))
         print(paint("  template bank may be exhausted -- add more or wait", DARK_ASH, DIM))
