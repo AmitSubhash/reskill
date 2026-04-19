@@ -7,11 +7,10 @@
 > Quizzes that appear while Claude Code is thinking. Turn waiting time
 > into learning time.
 
-**30-second demo:**
-[marketing/videos/reskill-launch.mp4](./marketing/videos/reskill-launch.mp4)
-(landscape) &nbsp;·&nbsp;
-[marketing/videos/reskill-tiktok.mp4](./marketing/videos/reskill-tiktok.mp4)
-(vertical)
+![reSkill demo](./marketing/videos/reskill-hero.gif)
+
+> Full videos: [landscape](./marketing/videos/reskill-launch.mp4)
+> · [vertical](./marketing/videos/reskill-tiktok.mp4)
 
 ```
 Claude is thinking...                   reSkill   Q1
