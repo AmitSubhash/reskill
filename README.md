@@ -1,5 +1,7 @@
 # reSkill
 
+![reSkill, while Claude thinks you learn](./marketing/banner/banner.gif)
+
 [![tests](https://github.com/AmitSubhash/reskill/actions/workflows/tests.yml/badge.svg)](https://github.com/AmitSubhash/reskill/actions/workflows/tests.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
