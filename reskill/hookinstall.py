@@ -341,6 +341,12 @@ def install(with_statusline: bool = True, compose_statusline: bool = True) -> in
             paint("  then start a real session with:  ", ASH, DIM)
             + paint("reskill claude", TEAL, BOLD)
         )
+        print()
+        print(
+            paint("  shipped on PyPI as ", ASH, DIM)
+            + paint("reskill-claude", TEAL)
+            + paint(" (the CLI stays `reskill`)", ASH, DIM)
+        )
     return 0
 
 

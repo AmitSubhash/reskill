@@ -82,7 +82,7 @@ def _check_reskill_installed() -> CheckResult:
         "reskill binary",
         "fail",
         "not on PATH",
-        "pip install git+https://github.com/AmitSubhash/reskill.git",
+        "pip install reskill-claude",
     )
 
 

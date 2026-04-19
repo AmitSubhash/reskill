@@ -30,8 +30,8 @@ Claude is thinking...                   reSkill   Q1
 ## Install
 
 ```bash
-# 1. install the package
-pip install git+https://github.com/AmitSubhash/reskill.git
+# 1. install the package  (the PyPI name is reskill-claude; the CLI binary is `reskill`)
+pip install reskill-claude
 
 # 2. see it work, no settings touched
 reskill demo
@@ -42,6 +42,7 @@ reskill doctor
 ```
 
 Prefer editable? `git clone https://github.com/AmitSubhash/reskill.git && cd reskill && pip install -e .`
+Or install straight from GitHub: `pip install git+https://github.com/AmitSubhash/reskill.git`.
 
 ## Use
 
