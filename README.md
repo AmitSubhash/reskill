@@ -34,7 +34,14 @@ a day, come back, pick up where you left off.
 ## Install
 
 ```bash
-pip install -e ~/Projects/reskill
+# Option 1: from GitHub (recommended while on 0.2.x)
+pip install git+https://github.com/AmitSubhash/reskill.git
+
+# Option 2: editable, for hacking on it
+git clone https://github.com/AmitSubhash/reskill.git
+cd reskill && pip install -e .
+
+# Then, either way:
 reskill install     # adds Claude Code hooks + statusline (reversible)
 reskill doctor      # confirms everything is wired up
 ```
