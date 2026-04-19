@@ -54,13 +54,15 @@ focus it, press `1`-`4` to answer.
 **Anytime, anywhere:**
 
 ```bash
-reskill next          # one context-matched quiz, right now
-reskill session       # commit-driven deck (last 7 days)
-reskill review        # drill your recently-missed questions
-reskill doctor        # diagnose anything that feels off
-reskill status        # one-liner: 0 mastered · 3/5 today · 🔥 5
-reskill stats         # level, XP, per-concept mastery
-reskill streak        # 12-week github-style heatmap
+reskill next                          # one context-matched quiz, right now
+reskill next --concept torch          # target a specific topic
+reskill session                       # commit-driven deck (last 7 days)
+reskill review                        # drill your recently-missed questions
+reskill topics                        # learning map: every concept + mastery
+reskill doctor                        # diagnose anything that feels off
+reskill status                        # one-liner: 0 mastered · 3/5 today · 🔥 5
+reskill stats                         # level, XP, per-concept mastery
+reskill streak                        # 12-week github-style heatmap
 ```
 
 ## How it works
