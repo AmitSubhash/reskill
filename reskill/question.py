@@ -182,27 +182,27 @@ TEMPLATE_BANK: dict[str, list[Question]] = {
     "async_def": [
         _q(
             concept="async",
-            format="output",
-            prompt="What does this print?",
+            format="bug",
+            prompt="A handler randomly drops one of the two DB writes. Why?",
             code=(
-                "async def work():\n"
-                "    print('starting')\n"
-                "    return 42\n\n"
-                "result = work()\n"
-                "print(result)"
+                "async def save_both(user, order):\n"
+                "    asyncio.create_task(db.save(user))\n"
+                "    asyncio.create_task(db.save(order))\n"
+                "    return 'ok'"
             ),
             opts=[
-                ("starting\\n42", False),
-                ("42", False),
-                ("<coroutine object work at 0x...>", True),
-                ("RuntimeError: coroutine never awaited", False),
+                ("create_task is non-blocking -- the function returns before the tasks run, and tasks can be GC'd if no strong refs are held", True),
+                ("db.save must be awaited directly; create_task only works on sync callables", False),
+                ("The two tasks race on the same connection and one gets cancelled", False),
+                ("asyncio.create_task requires an explicit event loop argument outside of asyncio.run", False),
             ],
             explanation=(
-                "Calling an async function does NOT run it -- it returns a coroutine "
-                "object. 'starting' never prints because the body doesn't execute. "
-                "You'd need `asyncio.run(work())` or `await work()` to actually run it. "
-                "You WILL see a RuntimeWarning on exit though: 'coroutine was never "
-                "awaited'."
+                "asyncio holds only a WEAK reference to tasks created via "
+                "create_task. If no strong reference is kept, the task can be "
+                "garbage-collected mid-flight -- and you see 'Task was destroyed "
+                "but it is pending!'. Either hold refs in a set (and discard on "
+                "done_callback), or use TaskGroup for structured lifetimes. "
+                "Python 3.11+ docs explicitly warn about this."
             ),
         ),
         _q(
@@ -286,21 +286,22 @@ TEMPLATE_BANK: dict[str, list[Question]] = {
             concept="http-status",
             format="scenario",
             prompt=(
-                "A client POSTs to /users. Creation succeeds but takes 30s because of "
-                "downstream systems. What's the most correct response code?"
+                "Your POST /users returns 201 on first call. The mobile client retries "
+                "(flaky network), and now you have duplicate users. What do you ship?"
             ),
             opts=[
-                ("201 Created, returned after everything finishes", False),
-                ("202 Accepted, with a polling URL for status", True),
-                ("200 OK, with a 'pending' field in the body", False),
-                ("503 Service Unavailable until the creation completes", False),
+                ("Return 409 Conflict on retry so the client stops", False),
+                ("Make the endpoint accept an Idempotency-Key header; return the ORIGINAL 201 on replay", True),
+                ("Switch to 202 Accepted + polling so retries are safe", False),
+                ("Use 204 No Content -- the client doesn't need the body back", False),
             ],
             explanation=(
-                "201 is for 'creation happened and here it is, now'. For slow or async "
-                "creation, use `202 Accepted` with a Location or status URL the client "
-                "can poll. 200 works but misses the signal that this is an async "
-                "operation. 503 is wrong -- the service isn't unavailable, it's just "
-                "being slow."
+                "This is why Stripe/GitHub/AWS all adopt `Idempotency-Key`. The "
+                "server stores (key -> prior response) and on a repeat POST with "
+                "the same key returns the exact same 201 body. 409 is wrong "
+                "because the first call DID succeed -- the client has no way to "
+                "know that. 202 doesn't fix duplicates; it just moves the problem. "
+                "RFC 9110 and the IETF draft on HTTP idempotency cover the pattern."
             ),
         ),
     ],
@@ -335,24 +336,25 @@ TEMPLATE_BANK: dict[str, list[Question]] = {
         _q(
             concept="comprehensions",
             format="output",
-            prompt="What does this print?",
+            prompt="A teammate refactors a loop into this comprehension. What prints?",
             code=(
-                "data = [1, 2, 3, 4, 5]\n"
-                "result = [x for x in data if x > 2 else 0]\n"
-                "print(result)"
+                "rows = [{'id': 1}, {'id': 2}, {'id': 3}]\n"
+                "seen = set()\n"
+                "unique = [r for r in rows if r['id'] not in seen and not seen.add(r['id'])]\n"
+                "print([r['id'] for r in unique])"
             ),
             opts=[
-                ("[0, 0, 3, 4, 5]", False),
-                ("[3, 4, 5]", False),
-                ("SyntaxError", True),
-                ("[1, 2, 3, 4, 5]", False),
+                ("[1, 2, 3] -- works, but relies on set.add returning None", True),
+                ("[] -- set.add returns None which is falsy, filtering everything out", False),
+                ("SyntaxError: cannot call mutating method inside a comprehension", False),
+                ("[1, 1, 2, 2, 3, 3] -- each id appears twice from the short-circuit", False),
             ],
             explanation=(
-                "`if ... else` in a comprehension only works in the VALUE position, "
-                "not the filter position. Legal: `[x if x>2 else 0 for x in data]`. "
-                "Or filter: `[x for x in data if x>2]`. You can't combine `if...else` "
-                "WITH a filter in the same comp; you'd nest them: "
-                "`[x if x>2 else 0 for x in data if x is not None]`."
+                "`set.add` returns None, and `not None` is True, so the filter "
+                "passes every first-seen id. Clever, but this is exactly the kind "
+                "of code that gets flagged in review: side effects inside a "
+                "comprehension make the intent opaque. Prefer `dict.fromkeys(ids)` "
+                "or a plain for-loop when you need de-duplication with order."
             ),
         ),
     ],
@@ -473,70 +475,86 @@ TEMPLATE_BANK: dict[str, list[Question]] = {
     "mutable_default": [
         _q(
             concept="mutable-default",
-            format="output",
-            prompt="What does the second call print?",
+            format="bug",
+            prompt=(
+                "A junior's PR avoids the mutable-default warning by using a tuple. "
+                "Integration tests still fail intermittently. Why?"
+            ),
             code=(
-                "def add(item, bag=[]):\n"
-                "    bag.append(item)\n"
-                "    return bag\n\n"
-                "print(add(1))\n"
-                "print(add(2))"
+                "def enqueue(item, log=(), ts=datetime.now()):\n"
+                "    log = (*log, (ts, item))\n"
+                "    return log"
             ),
             opts=[
-                ("[1] then [2]", False),
-                ("[1] then [1, 2]", True),
-                ("[1] then [] then [2]", False),
-                ("TypeError on the second call", False),
+                ("The tuple is safe, but `ts=datetime.now()` is evaluated ONCE at def-time -- every call gets the import-time timestamp", True),
+                ("Tuples aren't actually immutable when they contain mutable elements like datetime", False),
+                ("`(*log, ...)` unpacks the tuple incorrectly; should be `log + (...,)`", False),
+                ("The flake is timezone-related -- datetime.now() returns naive datetimes", False),
             ],
             explanation=(
-                "Default arguments are evaluated ONCE at function definition. "
-                "The list persists across calls. Idiom: use `bag=None` and "
-                "`if bag is None: bag = []` inside the body."
+                "The mutable-default rule is really the 'default evaluated at "
+                "def-time' rule. Any call expression in a default binds once: "
+                "`datetime.now()`, `uuid.uuid4()`, `socket.gethostname()` all "
+                "freeze at import. Idiom: `ts: datetime | None = None` and "
+                "`ts = ts or datetime.now()` inside the body. This bites people "
+                "who thought swapping `[]` for `()` was the whole fix."
             ),
         ),
     ],
     "late_binding_closure": [
         _q(
             concept="closures",
-            format="output",
-            prompt="What gets printed?",
+            format="bug",
+            prompt=(
+                "Click handlers in a dashboard all open the LAST user's profile. "
+                "The registration loop looks clean. Which fix is correct AND readable?"
+            ),
             code=(
-                "fns = [lambda: i for i in range(3)]\n"
-                "print([f() for f in fns])"
+                "handlers = []\n"
+                "for user in users:\n"
+                "    handlers.append(lambda: open_profile(user))"
             ),
             opts=[
-                ("[0, 1, 2]", False),
-                ("[2, 2, 2]", True),
-                ("[3, 3, 3]", False),
-                ("TypeError", False),
+                ("Use `functools.partial(open_profile, user)` -- binds the value at construction time", True),
+                ("Wrap in a frozen dataclass so user can't be mutated later", False),
+                ("Replace the for-loop with `map(lambda u: lambda: open_profile(u), users)` -- map forces early binding", False),
+                ("Add `nonlocal user` inside the lambda to force a fresh binding per iteration", False),
             ],
             explanation=(
-                "Closures capture variables by reference, not value. By the time "
-                "the lambdas run, `i` is 2. Fix with a default arg: "
-                "`lambda i=i: i`, or `functools.partial`."
+                "Every lambda closes over the SAME `user` name, which by the end "
+                "of the loop points to the last element. `partial` evaluates its "
+                "args immediately, capturing the value. `lambda u=user: ...` also "
+                "works via the default-arg trick, but `partial` is more explicit "
+                "about intent. `map` doesn't change closure semantics -- the "
+                "inner lambda still captures its enclosing `u` by reference. "
+                "`nonlocal` is the opposite of what you want."
             ),
         ),
     ],
     "is_vs_eq": [
         _q(
             concept="identity",
-            format="output",
-            prompt="What does this print?",
+            format="bug",
+            prompt="This passes locally, fails in CI. Python 3.12 started emitting SyntaxWarning. What's the line?",
             code=(
-                "a = 257\n"
-                "b = 257\n"
-                "print(a is b, a == b)"
+                "def describe(x):\n"
+                "    if x is 1:\n"
+                "        return 'one'\n"
+                "    return 'other'"
             ),
             opts=[
-                ("True True", False),
-                ("False True", True),
-                ("True False", False),
-                ("Implementation-defined for both", False),
+                ("`is 1` works by accident via the small-int cache; 3.12 added a SyntaxWarning because it's almost always a bug", True),
+                ("`is` requires a variable on the right; literals are rejected starting in 3.12", False),
+                ("The warning is about `return` outside a try/except block", False),
+                ("3.12 changed the small-int range; only ints in [-5, 0] are cached now", False),
             ],
             explanation=(
-                "CPython caches small ints in [-5, 256], so `is` returns True "
-                "there but is False above 256. Always use `==` for value compare; "
-                "reserve `is` for None/True/False/sentinels."
+                "CPython caches small ints, so `x is 1` HAPPENED to work for "
+                "primitives. Python 3.8 added a SyntaxWarning for `is` with "
+                "literals, and linters (ruff F632) flag it. Same trap with `is "
+                "'hello'` -- works in the REPL because of string interning, fails "
+                "with larger strings or across process boundaries. Rule: `is` is "
+                "for None/True/False/sentinels ONLY."
             ),
         ),
     ],
@@ -544,24 +562,28 @@ TEMPLATE_BANK: dict[str, list[Question]] = {
         _q(
             concept="copy",
             format="bug",
-            prompt="Mutating one row of grid_b corrupts grid_a. Which line is the bug?",
+            prompt=(
+                "You `deepcopy` a config object before mutating it for a test. The "
+                "test still corrupts prod state. What's the most likely cause?"
+            ),
             code=(
-                "1  import copy\n"
-                "2  grid_a = [[0]*3 for _ in range(3)]\n"
-                "3  grid_b = copy.copy(grid_a)\n"
-                "4  grid_b[0][0] = 99\n"
-                "5  print(grid_a[0][0])"
+                "cfg = prod_config          # dataclass with a `db: Connection` field\n"
+                "test_cfg = copy.deepcopy(cfg)\n"
+                "test_cfg.db.execute('DELETE FROM users')"
             ),
             opts=[
-                ("Line 2 -- list multiplication shares references", False),
-                ("Line 3 -- copy.copy is shallow; inner lists are shared", True),
-                ("Line 4 -- you should slice with [0:1]", False),
-                ("Line 5 -- print is evaluating lazily", False),
+                ("Connection objects define __deepcopy__ returning self (or __reduce__ falls back to sharing) -- deepcopy doesn't clone live resources", True),
+                ("deepcopy is shallow when called on dataclasses; you need `dataclasses.replace`", False),
+                ("`Connection` inherits from object, which doesn't support deepcopy at all -- should have raised", False),
+                ("deepcopy preserves class identity via copyreg, so subclasses aren't cloned", False),
             ],
             explanation=(
-                "`copy.copy` (shallow) duplicates the outer list but the inner "
-                "lists are still the same objects. Use `copy.deepcopy(grid_a)` "
-                "or `[row[:] for row in grid_a]`."
+                "Objects can opt OUT of deepcopy by defining `__deepcopy__`, "
+                "`__copy__`, or `__reduce__`. Live resources (DB connections, "
+                "file handles, sockets, thread locks) typically return self "
+                "because copying a socket makes no sense. deepcopy's contract is "
+                "'respect what each class says'. If you need isolation, inject "
+                "a test-config by construction, don't deepcopy your way to it."
             ),
         ),
     ],
@@ -617,19 +639,30 @@ TEMPLATE_BANK: dict[str, list[Question]] = {
     "dataclass_frozen": [
         _q(
             concept="dataclass",
-            format="idiom",
-            prompt="You need a hashable, immutable record type. Most Pythonic?",
+            format="bug",
+            prompt=(
+                "You mark a dataclass `frozen=True` to use it as a dict key. It hashes "
+                "fine on creation but raises `TypeError: unhashable type` later. Why?"
+            ),
+            code=(
+                "@dataclass(frozen=True)\n"
+                "class CacheKey:\n"
+                "    user_id: int\n"
+                "    scopes: list[str] = field(default_factory=list)"
+            ),
             opts=[
-                ("class C:\n    def __init__(self, x): self.x = x", False),
-                ("@dataclass(frozen=True, slots=True)\nclass C: x: int", True),
-                ("collections.namedtuple('C', ['x'])", False),
-                ("dict(x=1)  # just use a dict", False),
+                ("`frozen=True` prevents rebinding the attribute, but the `list` field is still mutable and hashing fails when Python hashes the contents", True),
+                ("`default_factory` disables the auto-generated __hash__; must add `eq=False`", False),
+                ("`frozen=True` requires `slots=True` to actually freeze attributes", False),
+                ("Dataclasses drop __hash__ when any field has a default, regardless of frozen", False),
             ],
             explanation=(
-                "`@dataclass(frozen=True, slots=True)` (3.10+) gives __hash__, "
-                "__eq__, __repr__, immutability, and the memory benefit of "
-                "__slots__ in one decorator. namedtuple still works but lacks "
-                "field defaults and inheritance ergonomics."
+                "`frozen=True` gives you `__hash__`, but the hash is computed "
+                "from `tuple(fields)`. Python hashes by calling hash() on each "
+                "element -- and `hash([])` raises. Fix: make containers "
+                "immutable too (`tuple[str, ...]` with a `tuple()` factory, or "
+                "`frozenset`). Frozen dataclasses are 'shallowly immutable': "
+                "the references are frozen, not the pointees."
             ),
         ),
     ],
@@ -678,25 +711,27 @@ TEMPLATE_BANK: dict[str, list[Question]] = {
             ),
         ),
     ],
-    "f_string_debug": [
         _q(
             concept="f-string",
             format="output",
-            prompt="What prints?",
+            prompt="A 3.11 codebase upgrades to 3.12 and this line starts working that used to SyntaxError. Why?",
             code=(
-                "x = [1, 2]\n"
-                "print(f'{x=}')"
+                "names = ['ada', 'lin']\n"
+                "print(f'users: {\", \".join(n.upper() for n in names)}')"
             ),
             opts=[
-                ("[1, 2]", False),
-                ("x=[1, 2]", True),
-                ("x = [1, 2]", False),
-                ("SyntaxError on older Pythons only", False),
+                ("PEP 701 (3.12) lifts the 'no same-quote inside f-string' rule; reused quotes and multi-line expressions now parse", True),
+                ("3.12 made generator expressions implicitly list-cast inside f-strings", False),
+                ("3.12 added automatic `.upper()` on str fields inside f-strings", False),
+                ("It always worked -- the SyntaxError was a linter false positive", False),
             ],
             explanation=(
-                "The `=` specifier (3.8+) prints both the expression text and "
-                "its repr. Add `!r` or `:>10` after it for formatting. Best "
-                "debug-print idiom in modern Python."
+                "Pre-3.12, f-strings were parsed by a hand-rolled mini-tokenizer "
+                "that couldn't handle quotes reused inside the expression, "
+                "backslashes, or comments. PEP 701 made f-strings full "
+                "expressions in the grammar -- so `f\"{', '.join(...)}\"` and "
+                "multi-line expressions now work. Mostly invisible, but upgrades "
+                "can quietly change which code parses."
             ),
         ),
         _q(

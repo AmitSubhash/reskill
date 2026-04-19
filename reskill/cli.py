@@ -8,6 +8,7 @@ Usage:
   reskill review               drill your recently-missed questions
   reskill doctor               diagnose why reskill isn't behaving
   reskill topics               see every concept + your mastery progress
+  reskill gen [sha]            LLM-generate a quiz from a real commit diff
   reskill install              install the Claude Code hooks (PreToolUse,
                                PostToolUse, Stop) that signal the quiz pane
   reskill uninstall            remove the hooks
@@ -214,6 +215,10 @@ def main(argv: list[str] | None = None) -> int:
     if cmd == "topics":
         from . import topics_cmd
         return topics_cmd.run()
+    if cmd == "gen":
+        from . import gen_cmd
+        commit = rest[0] if rest and not rest[0].startswith("--") else None
+        return gen_cmd.run(commit=commit)
     if cmd == "install":
         from . import hookinstall
         return hookinstall.install()
