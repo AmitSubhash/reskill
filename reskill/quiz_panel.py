@@ -270,6 +270,39 @@ def _render_idle_card(session: SessionCounters, _paced: pacing.PacingState) -> N
     sys.stdout.flush()
 
 
+def _render_cooldown_card(
+    session: SessionCounters,
+    paced: pacing.PacingState,
+    _reason: str,
+) -> None:
+    """Shown when Claude is thinking but we're in a per-quiz cooldown.
+
+    Makes it clear the pane is ARMED and waiting, not idle or broken.
+    """
+    _set_pane_border("arming")
+    _clear_screen()
+    state = state_mod.load()
+    wait_s = max(1, int(pacing.seconds_until_next_allowed(paced)))
+    lines = [
+        "",
+        "  " + paint("reSkill", TEAL, BOLD) + "   " + session.badge(),
+        "  " + paint("claude is still thinking...", ASH, DIM),
+        "",
+        "  " + paint(f"next question in ~{wait_s}s", GOLD, BOLD),
+        "",
+        "  "
+        + paint(f"day {state.streak}", GOLD, BOLD)
+        + paint(" streak", ASH, DIM)
+        + "   "
+        + paint(f"{state.correct_today}/{state.daily_goal} today", SAGE),
+        "",
+    ]
+    sys.stdout.write("\n".join(lines))
+    sys.stdout.write("\n\n")
+    sys.stdout.write(_render_footer(FOOTER_IDLE))
+    sys.stdout.flush()
+
+
 def _render_take_a_breath() -> None:
     """Take-a-breath card shown when there are no matching questions.
 
@@ -423,7 +456,13 @@ def _quiz_loop_once(
     # Pacing gate (review items still obey the rate limit).
     gate = pacing.can_fire_now(paced, candidate_concept=pick.concept)
     if not gate.allowed:
-        _render_idle_card(session, paced)
+        # In cooldown between quizzes while Claude IS still thinking.
+        # Instead of showing the generic idle card (which says "waiting
+        # for claude to think" and looks like something's broken), show
+        # a "next question soon" card so the user knows we're armed.
+        _render_cooldown_card(session, paced, gate.reason)
+        # Short sleep so the next scheduler call doesn't spin.
+        time.sleep(1.0)
         return last_concept
 
     # Arming state: brief pulse + bell, then render.
@@ -553,8 +592,15 @@ def _quiz_loop_once(
 
 
 # ───────── Thinking-flag gating with grace ─────────
+#
+# Long Claude turns look like: UserPromptSubmit -> hook flag on -> many
+# PreToolUse/PostToolUse toggles -> long model-inference block -> Stop.
+# Between the last PostToolUse and the next PreToolUse (pure model
+# inference) the flag is CLEAR but Claude is still thinking. We bridge
+# that with transcript-mtime polling (activity.is_claude_active) plus
+# a grace window here. 30s covers xhigh-effort inferences.
 
-_IDLE_GRACE_SECONDS = 6.0
+_IDLE_GRACE_SECONDS = 30.0
 
 
 def _is_thinking_with_grace() -> bool:
