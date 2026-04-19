@@ -4,21 +4,38 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "reskill"
-version = "0.1.0"
-description = "Turn AI thinking time into developer growth"
-readme = "VISION.md"
+version = "0.2.0"
+description = "Quizzes that appear while Claude Code is thinking. Turn waiting time into learning time."
+readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"
-authors = [{name = "Amit T Subhash"}]
-keywords = ["claude-code", "developer-tools", "learning", "micro-learning", "terminal"]
+authors = [{name = "Amit Subhash"}]
+keywords = [
+    "claude-code",
+    "developer-tools",
+    "learning",
+    "micro-learning",
+    "terminal",
+    "tui",
+    "spaced-repetition",
+    "tmux",
+    "quizzes",
+]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Environment :: Console",
     "Intended Audience :: Developers",
+    "Intended Audience :: Education",
     "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Topic :: Education",
     "Topic :: Software Development",
+    "Topic :: Terminals",
 ]
 
 [project.scripts]
@@ -27,10 +44,12 @@ reskill = "reskill.cli:main"
 [project.urls]
 Homepage = "https://github.com/AmitSubhash/reskill"
 Repository = "https://github.com/AmitSubhash/reskill"
+Issues = "https://github.com/AmitSubhash/reskill/issues"
+Changelog = "https://github.com/AmitSubhash/reskill/releases"
 
 [tool.setuptools.packages.find]
 include = ["reskill*"]
-exclude = ["archive*"]
+exclude = ["archive*", "marketing*", "tests*"]
 
 [tool.ruff]
 line-length = 100
