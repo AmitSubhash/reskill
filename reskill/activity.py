@@ -43,18 +43,35 @@ def _flag_is_set() -> bool:
         return False
 
 
+# Hot path: quiz_panel polls _is_thinking every ~500ms. With thousands
+# of transcript files, repeatedly stat'ing them costs real CPU. Cache
+# the result briefly so back-to-back calls are O(1).
+_MTIME_CACHE_TTL_SECONDS = 0.4
+_mtime_cache: dict[str, tuple[float, float]] = {}  # key -> (mtime, cached_at)
+
+
 def _latest_transcript_mtime(cwd: str | None = None) -> float:
     """Most recent mtime across plausible transcript files.
 
     If `cwd` is given, we prefer files in the slug that matches that
     directory; otherwise we scan the whole projects tree but cap the
     walk for speed.
+
+    TTL-cached for _MTIME_CACHE_TTL_SECONDS so the quiz pane's polling
+    loop doesn't burn CPU on repeated stats of the same 11k+ files.
     """
     if not TRANSCRIPTS_ROOT.exists():
         return 0.0
 
+    now = time.time()
+    cache_key = cwd or ""
+    cached = _mtime_cache.get(cache_key)
+    if cached is not None:
+        mtime, cached_at = cached
+        if now - cached_at < _MTIME_CACHE_TTL_SECONDS:
+            return mtime
+
     best = 0.0
-    cutoff = time.time() - 60.0  # no point looking at stale files
     try:
         if cwd:
             slug = cwd.replace("/", "-")
@@ -63,17 +80,29 @@ def _latest_transcript_mtime(cwd: str | None = None) -> float:
                 for path in project_dir.glob("*.jsonl"):
                     try:
                         m = path.stat().st_mtime
-                        if m > best and m > cutoff:
+                        if m > best:
                             best = m
                     except OSError:
                         continue
                 if best:
+                    _mtime_cache[cache_key] = (best, now)
                     return best
 
-        # Global fallback: walk all project dirs.
+        # Global fallback: only scan directories whose directory mtime
+        # is recent. POSIX updates dir mtime on file-add/delete, so a
+        # dir whose mtime is days old cannot contain an active session.
+        # This turns O(total files) into O(active projects).
+        cutoff = now - TRANSCRIPT_FRESH_SECONDS * 4
+        active_dirs: list[Path] = []
         for project_dir in TRANSCRIPTS_ROOT.iterdir():
             if not project_dir.is_dir():
                 continue
+            try:
+                if project_dir.stat().st_mtime >= cutoff:
+                    active_dirs.append(project_dir)
+            except OSError:
+                continue
+        for project_dir in active_dirs:
             try:
                 for path in project_dir.glob("*.jsonl"):
                     try:
@@ -86,6 +115,8 @@ def _latest_transcript_mtime(cwd: str | None = None) -> float:
                 continue
     except OSError:
         return 0.0
+
+    _mtime_cache[cache_key] = (best, now)
     return best
 
 
