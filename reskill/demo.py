@@ -195,6 +195,26 @@ def _code_block(code: str) -> None:
     print(paint(f"  {bot}", STONE, DIM))
 
 
+def _preamble() -> None:
+    """Short up-front context so a new user knows they're watching a
+    simulation, not a real Claude session with quizzes glued on."""
+    print()
+    print(
+        "  "
+        + paint("reSkill demo", TEAL, BOLD)
+        + "  "
+        + paint("| a simulated Claude Code session with live quizzes", ASH, DIM)
+    )
+    print(
+        "  "
+        + paint(
+            "answer 1-4 or skip with x. this is stateless: no hooks, no settings touched.",
+            DARK_ASH, DIM,
+        )
+    )
+    time.sleep(0.8)
+
+
 def _banner(state: state_mod.State) -> None:
     print()
     title = paint("claude", TEAL, BOLD) + "  " + paint("sonnet 4.6", DARK_ASH)
@@ -242,7 +262,12 @@ def _end_of_turn_footer(state: state_mod.State) -> None:
 def run() -> None:
     state = state_mod.load()
 
-    os.system("clear")
+    # ANSI clear instead of `clear` subprocess: works on every terminal
+    # we target (Windows Terminal, iTerm, Apple Terminal, gnome-terminal,
+    # kitty, tmux) without spawning a shell.
+    sys.stdout.write("\x1b[2J\x1b[H")
+    sys.stdout.flush()
+    _preamble()
     _banner(state)
     time.sleep(0.6)
 
@@ -328,7 +353,7 @@ def run() -> None:
     print()
     print(
         "  "
-        + paint("session ended", ASH)
+        + paint("demo ended", ASH)
         + "  "
         + paint("|", DARK_ASH, DIM)
         + "  "
@@ -339,7 +364,25 @@ def run() -> None:
         + paint(f"level {state.level}", TEAL)
     )
     print()
-    print(paint("  run `reskill stats` to see your growth", ASH, DIM))
+    # End-card is the conversion moment: surface the two real next
+    # commands, not the passive `stats` link.
+    print(
+        "  "
+        + paint("next:  ", ASH, DIM)
+        + paint("reskill install", TEAL, BOLD)
+        + paint("   wire into your live Claude Code sessions (reversible)", ASH, DIM)
+    )
+    print(
+        "  "
+        + paint("   or:  ", ASH, DIM)
+        + paint("reskill claude", TEAL, BOLD)
+        + paint("    open a claude session with the quiz pane alongside", ASH, DIM)
+    )
+    print()
+    print(
+        "  "
+        + paint("`reskill stats` anytime to see growth.", DARK_ASH, DIM)
+    )
     print()
 
 
