@@ -1,6 +1,6 @@
 """`reskill quiz-panel` -- the interactive quiz UI in the tmux side pane.
 
-Design (evidence-cited, see /Users/amit/Projects/reskill/TODO.md):
+Design (evidence-cited, see TODO.md):
 
   - Dynamic footer bar: always shows the keys available in the current
     state. (Posting, lazygit pattern.)

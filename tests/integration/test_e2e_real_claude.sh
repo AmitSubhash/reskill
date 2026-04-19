@@ -6,7 +6,8 @@ SESSION="reskill-e2e-$$"
 mkdir -p ~/.reskill/state
 rm -f ~/.reskill/state/thinking ~/.reskill/state/last_active
 
-tmux new-session -d -s "$SESSION" -x 200 -y 50 -c /Users/amit/Projects/reskill
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+tmux new-session -d -s "$SESSION" -x 200 -y 50 -c "$REPO_ROOT"
 sleep 0.3
 tmux send-keys -t "$SESSION:0.0" "claude" C-m
 sleep 0.5
