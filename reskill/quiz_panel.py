@@ -497,6 +497,7 @@ def _quiz_loop_once(
                 },
                 last_concept=last_concept,
                 recent_formats=recent_formats,
+                excluded_concepts=blocked,
             )
             if retry is None:
                 pick = None
@@ -510,6 +511,7 @@ def _quiz_loop_once(
                 blocked.add(retry.concept)
                 continue
             # Different blocker (min-gap, hourly, etc.) -- wait it out.
+            gate = retry_gate
             pick = None
             break
         if pick is None:

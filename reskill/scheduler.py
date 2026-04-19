@@ -165,6 +165,7 @@ def _pick_from_concepts(
     seen_ids: set[str],
     avoid_concept: str | None = None,
     recent_formats: list[str] | None = None,
+    excluded_concepts: set[str] | None = None,
 ) -> tuple[Question, str] | None:
     """Pick a fresh question from the caller-ordered pattern_keys.
 
@@ -179,10 +180,14 @@ def _pick_from_concepts(
          questions within a concept still rotate.
     """
     recent_set = set((recent_formats or [])[-2:])
+    excluded = excluded_concepts or set()
     preferred: list[str] = []
     deprioritized: list[str] = []
     for key in pattern_keys:
-        if avoid_concept and _concept_label_for_key(key) == avoid_concept:
+        label = _concept_label_for_key(key)
+        if label in excluded:
+            continue
+        if avoid_concept and label == avoid_concept:
             deprioritized.append(key)
         else:
             preferred.append(key)
@@ -205,6 +210,7 @@ def choose(
     seen_ids: set[str],
     last_concept: str | None = None,
     recent_formats: list[str] | None = None,
+    excluded_concepts: set[str] | None = None,
 ) -> Pick | None:
     """Return the next question to show, or None if nothing fits.
 
@@ -238,6 +244,7 @@ def choose(
                 bucket, seen_ids,
                 avoid_concept=last_concept,
                 recent_formats=recent_formats,
+                excluded_concepts=excluded_concepts,
             )
             if picked:
                 q, concept = picked
@@ -264,18 +271,25 @@ def choose(
             bucket, seen_ids,
             avoid_concept=last_concept,
             recent_formats=recent_formats,
+            excluded_concepts=excluded_concepts,
         )
         if picked:
             q, concept = picked
             return Pick(question=q, concept=concept, source=tag)
 
     # Tier 4: last resort -- accept a previously-seen question.
-    for concept in random.sample(all_concepts, k=len(all_concepts)):
+    excluded = excluded_concepts or set()
+    fallback_concepts = [
+        key for key in all_concepts
+        if _concept_label_for_key(key) not in excluded
+    ]
+    for concept in random.sample(fallback_concepts, k=len(fallback_concepts)):
         bank = TEMPLATE_BANK.get(concept, [])
         if bank:
+            q = random.choice(bank)
             return Pick(
-                question=random.choice(bank),
-                concept=concept,
+                question=q,
+                concept=q.concept,
                 source="fallback",
             )
 
