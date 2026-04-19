@@ -55,28 +55,55 @@ def test_gate_opens_after_min_gap():
 
 
 def test_hourly_cap():
-    ps = PacingState()
-    for i in range(MAX_QUIZZES_PER_HOUR):
-        note_quiz_served(ps, f"c{i}", now=NOW + i * 120)
-    note_quiz_finished(ps, now=NOW + MAX_QUIZZES_PER_HOUR * 120)
-    # 91 s later: pass min-gap but hit hourly cap.
-    r = can_fire_now(ps, now=NOW + MAX_QUIZZES_PER_HOUR * 120 + 91)
-    assert not r.allowed
-    assert "hourly" in r.reason
+    # With the env-tunable defaults raised to effectively-unlimited,
+    # exercise the cap logic by overriding the env var inside the test.
+    import os
+    os.environ["RESKILL_MAX_PER_HOUR"] = "5"
+    # Reload the module so the constant picks up the override.
+    import importlib
+    import reskill.pacing as pm
+    importlib.reload(pm)
+    try:
+        ps = pm.PacingState()
+        for i in range(pm.MAX_QUIZZES_PER_HOUR):
+            pm.note_quiz_served(ps, f"c{i}", now=NOW + i * 120)
+        pm.note_quiz_finished(ps, now=NOW + pm.MAX_QUIZZES_PER_HOUR * 120)
+        r = pm.can_fire_now(
+            ps, now=NOW + pm.MAX_QUIZZES_PER_HOUR * 120 + 91,
+        )
+        assert not r.allowed
+        assert "hourly" in r.reason
+    finally:
+        del os.environ["RESKILL_MAX_PER_HOUR"]
+        importlib.reload(pm)
 
 
 def test_daily_cap():
-    ps = PacingState()
-    # Spread evenly across the 24h window so nothing falls off the
-    # window by the time we probe. 86400/N ensures each timestamp
-    # stays in-window.
-    spacing = 86400 // (MAX_QUIZZES_PER_DAY + 1)
-    for i in range(MAX_QUIZZES_PER_DAY):
-        note_quiz_served(ps, f"c{i}", now=NOW + i * spacing)
-    note_quiz_finished(ps, now=NOW + MAX_QUIZZES_PER_DAY * spacing)
-    r = can_fire_now(ps, now=NOW + MAX_QUIZZES_PER_DAY * spacing + MIN_SECONDS_BETWEEN_QUIZZES + 5)
-    assert not r.allowed
-    assert "daily" in r.reason or "hourly" in r.reason
+    import os
+    import importlib
+    os.environ["RESKILL_MAX_PER_HOUR"] = "9999"  # get out of the way
+    os.environ["RESKILL_MAX_PER_DAY"] = "5"
+    import reskill.pacing as pm
+    importlib.reload(pm)
+    try:
+        ps = pm.PacingState()
+        spacing = 86400 // (pm.MAX_QUIZZES_PER_DAY + 1)
+        for i in range(pm.MAX_QUIZZES_PER_DAY):
+            pm.note_quiz_served(ps, f"c{i}", now=NOW + i * spacing)
+        pm.note_quiz_finished(ps, now=NOW + pm.MAX_QUIZZES_PER_DAY * spacing)
+        r = pm.can_fire_now(
+            ps,
+            now=NOW
+            + pm.MAX_QUIZZES_PER_DAY * spacing
+            + pm.MIN_SECONDS_BETWEEN_QUIZZES
+            + 5,
+        )
+        assert not r.allowed
+        assert "daily" in r.reason or "hourly" in r.reason
+    finally:
+        del os.environ["RESKILL_MAX_PER_HOUR"]
+        del os.environ["RESKILL_MAX_PER_DAY"]
+        importlib.reload(pm)
 
 
 def test_same_concept_cooldown():

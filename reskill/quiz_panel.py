@@ -273,22 +273,31 @@ def _render_idle_card(session: SessionCounters, _paced: pacing.PacingState) -> N
 def _render_cooldown_card(
     session: SessionCounters,
     paced: pacing.PacingState,
-    _reason: str,
+    reason: str,
 ) -> None:
     """Shown when Claude is thinking but we're in a per-quiz cooldown.
 
     Makes it clear the pane is ARMED and waiting, not idle or broken.
+    The "next in Ns" only shows for min-gap blocks where we can
+    honestly compute the time. For other blockers (hourly cap, etc.)
+    we say "soon" instead of lying about a 1s countdown.
     """
     _set_pane_border("arming")
     _clear_screen()
     state = state_mod.load()
-    wait_s = max(1, int(pacing.seconds_until_next_allowed(paced)))
+    if "min-gap" in reason:
+        wait_s = max(1, int(pacing.seconds_until_next_allowed(paced)))
+        countdown = paint(f"next question in ~{wait_s}s", GOLD, BOLD)
+    elif "hourly" in reason or "daily" in reason:
+        countdown = paint("rate limit reached -- try again later", GOLD, BOLD)
+    else:
+        countdown = paint("picking the next concept...", GOLD, BOLD)
     lines = [
         "",
         "  " + paint("reSkill", TEAL, BOLD) + "   " + session.badge(),
         "  " + paint("claude is still thinking...", ASH, DIM),
         "",
-        "  " + paint(f"next question in ~{wait_s}s", GOLD, BOLD),
+        "  " + countdown,
         "",
         "  "
         + paint(f"day {state.streak}", GOLD, BOLD)
@@ -407,6 +416,20 @@ def _wait_for_continue(max_wait: float = 8.0) -> None:
     sys.stdout.flush()
 
 
+def _all_questions_for_concept(concept_label: str):
+    """All questions whose Question.concept equals `concept_label`.
+
+    Used to build a set of question IDs to exclude when the pacing
+    gate rejects a concept (same-concept cooldown) so the scheduler
+    can be retried without looping on the same options.
+    """
+    from .question import TEMPLATE_BANK
+    for bank in TEMPLATE_BANK.values():
+        for q in bank:
+            if q.concept == concept_label:
+                yield q
+
+
 # ───────── Main loop ─────────
 
 
@@ -455,13 +478,49 @@ def _quiz_loop_once(
 
     # Pacing gate (review items still obey the rate limit).
     gate = pacing.can_fire_now(paced, candidate_concept=pick.concept)
+    if not gate.allowed and "same-concept" in gate.reason:
+        # The scheduler picked a concept we JUST asked. Instead of
+        # sitting and waiting 60s for the per-concept cooldown, retry
+        # the scheduler with this concept blocked. We only do this
+        # a handful of times to avoid runaway recursion.
+        blocked: set[str] = {pick.concept}
+        for _ in range(8):
+            live_text = recent_transcript_text(cwd=os.getcwd() or project)
+            retry = scheduler.choose(
+                live_text=live_text,
+                commit_text="",
+                state=state,
+                seen_ids=seen | {
+                    q.id
+                    for concept in blocked
+                    for q in _all_questions_for_concept(concept)
+                },
+                last_concept=last_concept,
+                recent_formats=recent_formats,
+            )
+            if retry is None:
+                pick = None
+                break
+            retry_gate = pacing.can_fire_now(paced, candidate_concept=retry.concept)
+            if retry_gate.allowed:
+                pick = retry
+                gate = retry_gate
+                break
+            if "same-concept" in retry_gate.reason:
+                blocked.add(retry.concept)
+                continue
+            # Different blocker (min-gap, hourly, etc.) -- wait it out.
+            pick = None
+            break
+        if pick is None:
+            _render_cooldown_card(session, paced, gate.reason)
+            time.sleep(1.0)
+            return last_concept
+
     if not gate.allowed:
-        # In cooldown between quizzes while Claude IS still thinking.
-        # Instead of showing the generic idle card (which says "waiting
-        # for claude to think" and looks like something's broken), show
-        # a "next question soon" card so the user knows we're armed.
+        # Pacing gate blocks for a TIME reason (min-gap, hourly).
+        # Show cooldown and sleep.
         _render_cooldown_card(session, paced, gate.reason)
-        # Short sleep so the next scheduler call doesn't spin.
         time.sleep(1.0)
         return last_concept
 

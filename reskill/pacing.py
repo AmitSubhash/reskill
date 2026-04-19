@@ -59,13 +59,18 @@ def _env_float(name: str, default: float) -> float:
 MIN_SECONDS_AFTER_THINKING_START = _env_float("RESKILL_THINKING_DEBOUNCE", 3.0)
 # Back-to-back quizzes while Claude is still thinking: 10s is short
 # enough to feel responsive, long enough to avoid overwhelming the user.
-# The research default was 90s; we learned users want rapid-fire during
-# a long Claude turn.
 MIN_SECONDS_BETWEEN_QUIZZES = _env_float("RESKILL_MIN_GAP", 10.0)
-MAX_QUIZZES_PER_HOUR = int(_env_float("RESKILL_MAX_PER_HOUR", 20))
-MAX_QUIZZES_PER_DAY = int(_env_float("RESKILL_MAX_PER_DAY", 60))
+# Caps are very loose by default -- the scheduler's own interleaving +
+# format-mix logic handles variety; hard caps were creating confusing
+# "stuck" states when hit. Set to a very large number so they don't
+# trigger in practice. Users who want a real cap can set the env var.
+MAX_QUIZZES_PER_HOUR = int(_env_float("RESKILL_MAX_PER_HOUR", 9999))
+MAX_QUIZZES_PER_DAY = int(_env_float("RESKILL_MAX_PER_DAY", 9999))
+# Same-concept cooldown: don't re-ask the SAME concept for N seconds.
+# Keeps variety. When the gate blocks on this, we DON'T just sit and
+# wait -- quiz_panel retries with the concept excluded.
 MIN_SECONDS_BEFORE_SAME_CONCEPT = _env_float(
-    "RESKILL_SAME_CONCEPT_COOLDOWN", 90,
+    "RESKILL_SAME_CONCEPT_COOLDOWN", 60,
 )
 
 
