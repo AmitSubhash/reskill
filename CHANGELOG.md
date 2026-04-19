@@ -4,6 +4,43 @@ All notable changes to reSkill. Follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) with minor
 liberties for pre-1.0 pace.
 
+## [Unreleased]
+
+### Added
+- `reskill topics` — learning-map view of all 50 concepts grouped by
+  confusable cluster, with per-concept mastery markers.
+- `reskill next --concept X` — drill a specific concept directly
+  instead of waiting for the scheduler to pick it.
+- 20 second-entry questions across concepts that previously had only
+  one variant. Bank now 74 questions across 50 concepts; 24 concepts
+  have 2+ variants so the scheduler has real within-concept choice.
+- 7 new smoke tests covering doctor/topics/next/review_queue/activity
+  cache. Total: 52 tests.
+- GitHub social preview image (1280x640), hero GIF inline in README,
+  landscape + vertical MP4 demos.
+- CONTRIBUTING.md and marketing/LAUNCH_CHECKLIST.md.
+
+### Fixed
+- `have_reskill_hooks()` now looks under `settings.hooks.*` first so
+  the quiz pane correctly detects hook-driven timing after the codex
+  schema fix.
+- Bumped `TRANSCRIPT_FRESH_SECONDS` 3s → 15s and the quiz-pane grace
+  period 6s → 30s so long xhigh-effort Claude inferences don't
+  falsely register as idle.
+- Quiz pane now shows a "claude is still thinking... next question in
+  ~Ns" cooldown card instead of the generic idle card when blocked by
+  the pacing gate during an active turn.
+
+### Performance
+- 30,000× faster transcript-polling hot path via TTL cache and
+  active-directory filtering. Was ~32ms/call; now ~0.001ms cached,
+  ~0.05ms uncached.
+
+### Changed
+- Pacing defaults relaxed: 10s min gap (was 30), 20/hr (was 10),
+  60/day (was 40), 90s per-concept cooldown (was 120). All still
+  env-var tunable.
+
 ## [0.2.0] - 2026-04-18
 
 First properly-shippable build. The tmux/macOS live pane works
