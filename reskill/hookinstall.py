@@ -12,7 +12,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from .palette import ASH, BOLD, DARK_ASH, DIM, SAGE, paint
+from .palette import ASH, BOLD, DARK_ASH, DIM, SAGE, TEAL, paint
 
 SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
 HOOK_MARKER = "reskill log-session"
@@ -292,6 +292,13 @@ def install(with_statusline: bool = True, compose_statusline: bool = True) -> in
             )
         )
     print(paint(f"  backup saved to {SETTINGS_PATH}.reskill-bak", DARK_ASH, DIM))
+    if not already:
+        print()
+        print(paint("  try it now:  ", ASH, DIM) + paint("reskill demo", TEAL, BOLD))
+        print(
+            paint("  then start a real session with:  ", ASH, DIM)
+            + paint("reskill claude", TEAL, BOLD)
+        )
     return 0
 
 

@@ -19,7 +19,6 @@ from dataclasses import dataclass
 
 from .question import Question
 
-
 _DEFAULT_PRIORITY = 3  # re-serve after this many other questions
 
 

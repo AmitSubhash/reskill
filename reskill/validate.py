@@ -17,7 +17,6 @@ from dataclasses import dataclass
 
 from .question import Question
 
-
 BANNED_STEM_PHRASES: tuple[str, ...] = (
     "which of the following is not",
     "which is not",

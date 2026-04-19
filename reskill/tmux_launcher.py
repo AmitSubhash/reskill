@@ -27,7 +27,6 @@ import uuid
 
 from .palette import ASH, BOLD, DARK_ASH, DIM, TEAL, paint
 
-
 DEFAULT_PANEL_COLS = 52
 
 
@@ -126,6 +125,10 @@ def launch(claude_args: list[str]) -> int:
                 paint("  reSkill", TEAL, BOLD),
                 paint("quiz pane opened in a new window", ASH),
             )
+            print(
+                paint("  no tmux found -- for a real split-pane experience:", ASH, DIM)
+            )
+            print(paint("    brew install tmux", TEAL))
             print(paint("  starting claude here now...", ASH, DIM))
             print()
             os.execvp("claude", ["claude", *claude_args])

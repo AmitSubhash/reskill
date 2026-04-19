@@ -7,6 +7,8 @@
 > Quizzes that appear while Claude Code is thinking. Turn waiting time
 > into learning time.
 
+**Zero network. No Claude slowdown. Local SQLite + a single flag file.** MIT, alpha (v0.2.x), works end-to-end today.
+
 ![reSkill demo](./marketing/videos/reskill-hero.gif)
 
 > Full videos: [landscape](./marketing/videos/reskill-launch.mp4)
@@ -34,17 +36,18 @@ a day, come back, pick up where you left off.
 ## Install
 
 ```bash
-# Option 1: from GitHub (recommended while on 0.2.x)
+# 1) install the package
 pip install git+https://github.com/AmitSubhash/reskill.git
 
-# Option 2: editable, for hacking on it
-git clone https://github.com/AmitSubhash/reskill.git
-cd reskill && pip install -e .
+# 2) see it work, no settings touched
+reskill demo
 
-# Then, either way:
-reskill install     # adds Claude Code hooks + statusline (reversible)
-reskill doctor      # confirms everything is wired up
+# 3) wire it into Claude Code (reversible; backs up your settings.json)
+reskill install
+reskill doctor
 ```
+
+Prefer editable? `git clone https://github.com/AmitSubhash/reskill.git && cd reskill && pip install -e .`
 
 ## Use
 

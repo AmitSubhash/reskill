@@ -21,7 +21,6 @@ from pathlib import Path
 
 from .question import Option, Question
 
-
 GEN_CACHE_DIR = Path.home() / ".reskill" / "generated"
 
 # XML-tagged for Anthropic's structured-prompt best practice. The user's

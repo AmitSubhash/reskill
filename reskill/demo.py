@@ -18,23 +18,22 @@ import termios
 import time
 import tty
 
+from . import state as state_mod
 from .inline_box import render_correct_flash, render_question, render_wrong_reveal
 from .palette import (
+    ASH,
     BOLD,
-    DIM,
     DARK_ASH,
+    DIM,
     GOLD,
     INK,
     SAGE,
     STONE,
     TEAL,
     VIOLET,
-    ASH,
     paint,
 )
 from .question import Question, generate_question
-from . import state as state_mod
-
 
 HR = "\u2500" * 60
 SPINNER = list("\u280b\u2819\u2839\u2838\u283c\u2834\u2826\u2827\u2807\u280f")

@@ -20,7 +20,6 @@ import re
 import shutil
 import sys
 
-
 # Control sequences
 SAVE_CURSOR_DEC = b"\x1b7"
 RESTORE_CURSOR_DEC = b"\x1b8"

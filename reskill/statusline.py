@@ -36,7 +36,6 @@ from pathlib import Path
 from . import state as state_mod
 from .palette import ASH, BOLD, DARK_ASH, DIM, GOLD, SAGE, STONE, TEAL, paint
 
-
 STATE_DIR = Path.home() / ".reskill" / "state"
 THINKING_FILE = STATE_DIR / "thinking"
 

@@ -17,12 +17,20 @@ import re
 import shutil
 
 from .palette import (
-    BOLD, DIM,
-    INK, STONE, ASH, DARK_ASH, SAGE, TEAL, GOLD, VIOLET, ROSE,
+    ASH,
+    BOLD,
+    DARK_ASH,
+    DIM,
+    GOLD,
+    INK,
+    ROSE,
+    SAGE,
+    STONE,
+    TEAL,
+    VIOLET,
     paint,
 )
 from .question import Question
-
 
 TL, TR, BL, BR = "\u256d", "\u256e", "\u2570", "\u256f"
 HZ, VT = "\u2500", "\u2502"

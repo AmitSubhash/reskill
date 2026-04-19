@@ -26,7 +26,7 @@ import tty
 from . import state as state_mod
 from .inline_box import render_correct_flash, render_question, render_wrong_reveal
 from .palette import ASH, BOLD, DIM, GOLD, ROSE, SAGE, TEAL, paint
-from .question import Question, TEMPLATE_BANK
+from .question import TEMPLATE_BANK, Question
 
 
 def _all_questions_by_id() -> dict[str, Question]:

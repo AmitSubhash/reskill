@@ -10,7 +10,6 @@ recent code.
 from __future__ import annotations
 
 import os
-import random
 import select
 import sys
 import termios
@@ -26,7 +25,7 @@ from .inline_box import (
 )
 from .log_session import CACHE_ROOT, _load_cache, _project_hash
 from .palette import ASH, BOLD, DARK_ASH, DIM, GOLD, ROSE, SAGE, STONE, TEAL, paint
-from .question import Question, detect_concepts, TEMPLATE_BANK
+from .question import Question
 
 
 def _load_concept_weights(cwd: str | None) -> dict[str, int]:

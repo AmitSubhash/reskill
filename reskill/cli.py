@@ -1,30 +1,38 @@
 """reskill -- learn during AI thinking time.
 
-Usage:
+Quickstart:
+  pip install git+https://github.com/AmitSubhash/reskill.git
+  reskill demo                 see it work (no settings touched)
+  reskill install              wire into Claude Code (reversible)
+  reskill claude               launch claude with a quiz pane alongside
+
+Main commands:
   reskill claude [args...]     launch claude in a tmux split with a quiz pane
-  reskill quiz-panel           the pane itself (usually spawned by `claude`)
-  reskill session [--since 7d] quiz deck built from your recent commits
   reskill next                 serve one context-matched quiz right now
+  reskill session [--since 7d] quiz deck built from your recent commits
   reskill review               drill your recently-missed questions
-  reskill doctor               diagnose why reskill isn't behaving
   reskill topics               see every concept + your mastery progress
   reskill gen [sha]            LLM-generate a quiz from a real commit diff
   reskill gen --live           LLM-generate from the current Claude transcript
+  reskill demo                 interactive demo (no Claude Code required)
+  reskill stats                show streak, XP, concept mastery
+
+Setup & diagnostics:
   reskill install              install the Claude Code hooks (PreToolUse,
                                PostToolUse, Stop) that signal the quiz pane
   reskill uninstall            remove the hooks
+  reskill doctor               diagnose why reskill isn't behaving
   reskill hook-status          are the hooks installed?
-  reskill log-session <path>   ingest a transcript (called by the Stop hook)
+
+Status widgets:
   reskill status [--plain]     terse one-line status (for $PS1, tmux, etc.)
   reskill streak               12-week heatmap of your answered days
-  reskill demo                 interactive demo (no Claude Code required)
-  reskill stats                show streak, XP, concept mastery
-  reskill pause                turn quizzes OFF globally
-  reskill resume               turn quizzes back ON
+  reskill pause / resume       toggle quizzes globally
+
+Internals (usually spawned by other commands):
+  reskill quiz-panel           the pane itself
+  reskill log-session <path>   ingest a transcript (called by the Stop hook)
   reskill question             render a sample quiz box (UI sanity check)
-  reskill wrap <cmd> [args]    legacy PTY-wrap (DECSTBM; DEPRECATED -- does
-                               not cooperate with Ink/Claude Code; kept
-                               only for non-Ink programs)
 
 Flags:
   --no-quiz                    disable quizzes for this invocation only
@@ -45,7 +53,7 @@ from __future__ import annotations
 import os
 import sys
 
-from .palette import BOLD, DIM, INK, STONE, ASH, DARK_ASH, SAGE, TEAL, GOLD, VIOLET, paint
+from .palette import ASH, BOLD, DARK_ASH, DIM, GOLD, INK, SAGE, STONE, TEAL, VIOLET, paint
 
 
 def cmd_run(argv: list[str]) -> int:
@@ -136,8 +144,8 @@ def cmd_stats() -> int:
 
 def cmd_question() -> int:
     """Render a sample question for testing."""
-    from .question import TEMPLATE_BANK
     from .inline_box import render_question, render_wrong_reveal
+    from .question import TEMPLATE_BANK
 
     # Pick one question from each concept
     for _concept, questions in list(TEMPLATE_BANK.items())[:3]:

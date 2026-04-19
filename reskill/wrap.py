@@ -35,7 +35,6 @@ from .inline_box import (
 )
 from .question import Question, generate_question
 
-
 # ───────── ANSI helpers ─────────
 
 CURSOR_SHOW = b"\x1b[?25h"

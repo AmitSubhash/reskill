@@ -68,8 +68,9 @@ def run(timeout_seconds: float = 45.0, concept: str | None = None) -> int:
     if concept:
         # Target a specific concept. Match pattern key substring, then
         # fall back to semantic concept label substring.
-        from .question import TEMPLATE_BANK
         import random as _random
+
+        from .question import TEMPLATE_BANK
         needle = concept.lower()
         matches = [
             (k, _random.choice(v))

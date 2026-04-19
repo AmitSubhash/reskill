@@ -43,6 +43,22 @@ SETTINGS = Path.home() / ".claude" / "settings.json"
 TRANSCRIPTS = Path.home() / ".claude" / "projects"
 
 
+def _is_first_run() -> bool:
+    """True when the user has never answered a quiz.
+
+    Several checks report "missing file" conditions that are perfectly
+    normal on a fresh install -- hook log, transcript dir, concept
+    cache. Surfacing them as warnings makes `reskill doctor` look
+    broken 30 seconds after `pip install`, which is exactly when new
+    users are deciding whether to keep the tool.
+    """
+    try:
+        s = state_mod.load()
+    except Exception:
+        return True
+    return s.xp_total == 0 and s.streak == 0 and not s.seen_questions
+
+
 def _check_claude_installed() -> CheckResult:
     if shutil.which("claude"):
         return CheckResult(
@@ -66,7 +82,7 @@ def _check_reskill_installed() -> CheckResult:
         "reskill binary",
         "fail",
         "not on PATH",
-        "pip install -e /Users/amit/Projects/reskill",
+        "pip install git+https://github.com/AmitSubhash/reskill.git",
     )
 
 
@@ -150,6 +166,12 @@ def _check_hook_actually_fired() -> CheckResult:
     on every Stop event even if the underlying command errors.
     """
     if not HOOK_LOG.exists():
+        if _is_first_run():
+            return CheckResult(
+                "hook fire history",
+                "pass",
+                "not yet -- run `reskill claude` to start a session",
+            )
         return CheckResult(
             "hook fire history",
             "warn",
@@ -206,7 +228,7 @@ def _check_pacing_state() -> CheckResult:
     now = time.time()
     hourly = sum(1 for t in ps.quiz_timestamps if t > now - 3600)
     daily = sum(1 for t in ps.quiz_timestamps if t > now - 86400)
-    from .pacing import MAX_QUIZZES_PER_HOUR, MAX_QUIZZES_PER_DAY
+    from .pacing import MAX_QUIZZES_PER_DAY, MAX_QUIZZES_PER_HOUR
 
     if hourly >= MAX_QUIZZES_PER_HOUR:
         return CheckResult(
@@ -259,6 +281,12 @@ def _check_state_sanity() -> CheckResult:
 
 def _check_transcripts() -> CheckResult:
     if not TRANSCRIPTS.exists():
+        if _is_first_run():
+            return CheckResult(
+                "Claude transcripts",
+                "pass",
+                "not yet -- ~/.claude/projects will populate on first session",
+            )
         return CheckResult(
             "Claude transcripts",
             "warn",
@@ -267,6 +295,12 @@ def _check_transcripts() -> CheckResult:
         )
     jsonls = list(TRANSCRIPTS.rglob("*.jsonl"))
     if not jsonls:
+        if _is_first_run():
+            return CheckResult(
+                "Claude transcripts",
+                "pass",
+                "not yet -- start a Claude session to populate",
+            )
         return CheckResult(
             "Claude transcripts",
             "warn",
@@ -303,6 +337,12 @@ def _check_tmux() -> CheckResult:
 def _check_concept_cache() -> CheckResult:
     cache_root = Path.home() / ".reskill" / "project_cache"
     if not cache_root.exists():
+        if _is_first_run():
+            return CheckResult(
+                "concept cache",
+                "pass",
+                "not yet -- per-project cache builds on first Claude session",
+            )
         return CheckResult(
             "concept cache",
             "warn",
@@ -311,6 +351,12 @@ def _check_concept_cache() -> CheckResult:
         )
     caches = list(cache_root.glob("*/concepts.json"))
     if not caches:
+        if _is_first_run():
+            return CheckResult(
+                "concept cache",
+                "pass",
+                "not yet -- cache dir exists but not populated",
+            )
         return CheckResult(
             "concept cache",
             "warn",

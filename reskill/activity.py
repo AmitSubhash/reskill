@@ -17,10 +17,8 @@ The quiz pane prefers signal 1 when available, falls back to signal 2.
 
 from __future__ import annotations
 
-import os
 import time
 from pathlib import Path
-
 
 STATE_DIR = Path.home() / ".reskill" / "state"
 THINKING_FILE = STATE_DIR / "thinking"

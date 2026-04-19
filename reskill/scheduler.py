@@ -28,7 +28,7 @@ import time
 from dataclasses import dataclass
 
 from . import state as state_mod
-from .question import Question, TEMPLATE_BANK, detect_concepts
+from .question import TEMPLATE_BANK, Question, detect_concepts
 
 
 @dataclass(frozen=True)
