@@ -4,15 +4,12 @@
 [![license: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 
-> Quizzes that appear while Claude Code is thinking. Turn waiting time
-> into learning time.
+> A terminal companion for Claude Code. While Claude thinks for 23
+> seconds, reSkill hands you a quiz about the exact code it's working
+> on.
 
-**Zero network. No Claude slowdown. Local SQLite + a single flag file.** MIT, alpha (v0.2.x), works end-to-end today.
-
-![reSkill demo](./marketing/videos/reskill-hero.gif)
-
-> Full videos: [landscape](./marketing/videos/reskill-launch.mp4)
-> · [vertical](./marketing/videos/reskill-tiktok.mp4)
+Zero network. No Claude slowdown. Local state, single flag file. MIT,
+alpha. Landing: <https://amitsubhash.github.io/reskill/>.
 
 ```
 Claude is thinking...                   reSkill   Q1
@@ -28,21 +25,16 @@ Claude is thinking...                   reSkill   Q1
                                         ╰──────────────────────╯
 ```
 
-While Claude thinks, you answer. When Claude finishes, you've learned
-something you didn't want to Google. Over time the scheduler tracks
-what you miss and drills it again. Streaks are loss-averse-free — miss
-a day, come back, pick up where you left off.
-
 ## Install
 
 ```bash
-# 1) install the package
+# 1. install the package
 pip install git+https://github.com/AmitSubhash/reskill.git
 
-# 2) see it work, no settings touched
+# 2. see it work, no settings touched
 reskill demo
 
-# 3) wire it into Claude Code (reversible; backs up your settings.json)
+# 3. wire it into Claude Code (reversible; backs up your settings.json)
 reskill install
 reskill doctor
 ```
@@ -51,67 +43,70 @@ Prefer editable? `git clone https://github.com/AmitSubhash/reskill.git && cd res
 
 ## Use
 
-**Live during Claude sessions** (the main one):
+Live during Claude sessions (the main one):
 
 ```bash
 reskill claude   # opens claude + a quiz pane alongside
 ```
 
 If you have tmux: splits the current window. If not: pops a second
-Terminal.app / iTerm2 window. Click the quiz pane (or `Ctrl+B →`) to
-focus it, press `1`-`4` to answer.
+Terminal.app or iTerm2 window. Click the quiz pane (or `Ctrl+B →`) to
+focus it, press `1` to `4` to answer.
 
-**Anytime, anywhere:**
+Anytime, anywhere:
 
 ```bash
-reskill next                          # one context-matched quiz, right now
-reskill next --concept torch          # target a specific topic
-reskill session                       # commit-driven deck (last 7 days)
-reskill review                        # drill your recently-missed questions
-reskill topics                        # learning map: every concept + mastery
-reskill doctor                        # diagnose anything that feels off
-reskill status                        # one-liner: 0 mastered · 3/5 today · 🔥 5
-reskill stats                         # level, XP, per-concept mastery
-reskill streak                        # 12-week github-style heatmap
+reskill next                    # one context-matched quiz, right now
+reskill next --concept torch    # target a specific topic
+reskill session                 # commit-driven deck (last 7 days)
+reskill review                  # drill your recently-missed questions
+reskill topics                  # learning map: every concept + mastery
+reskill doctor                  # diagnose anything that feels off
+reskill status                  # one-liner: 0 mastered, 3/5 today, 5 streak
+reskill stats                   # level, XP, per-concept mastery
+reskill streak                  # 12-week heatmap of your answered days
 ```
 
 ## How it works
 
-- **Hooks** fire on `UserPromptSubmit` / `PreToolUse` / `PostToolUse`
-  to toggle a flag file at `~/.reskill/state/thinking`.
+- **Hooks** fire on `UserPromptSubmit`, `PreToolUse`, `PostToolUse`,
+  `Stop` to toggle a flag file at `~/.reskill/state/thinking`.
 - **Quiz pane** watches the flag (or falls back to transcript-mtime
   polling if hooks aren't installed) and serves a question whenever
   Claude is mid-thought.
 - **Scheduler** picks questions matched to what Claude is writing.
   Tiers: live transcript > recent git commits > cumulative cache.
   Within a tier: SM-2 overdue > new > not-due. Across concepts:
-  interleaved within confusable clusters (Rohrer & Taylor 2007).
-  Within a concept: format diversity (Roediger & Karpicke 2006).
-  Targets 15% error rate per Wilson 2019.
-- **Pacing gate** rate-limits: 10s min gap, 20/hr, 60/day. All
-  `RESKILL_*` env-var tunable.
+  interleaved within confusable clusters (Rohrer &amp; Taylor 2007).
+  Within a concept: format diversity (Roediger &amp; Karpicke 2006).
+  Targets a 15% error rate per Wilson 2019.
+- **Pacing gate** rate-limits with sensible defaults, tunable via
+  `RESKILL_*` env vars.
 - **In-session re-queue** pushes wrong answers back 3 items later
-  (Butler & Roediger 2008).
-- **Hypercorrection cue** — wrong answers given in <5s get a "◉
-  sticky one" banner; research says these stick hardest.
+  (Butler &amp; Roediger 2008).
+- **Hypercorrection cue**: wrong answers given in under 5 seconds
+  get a sticky flag. Research says these stick hardest.
 
-## Controls in every quiz
+## Controls
 
-| Key      | Action                                    |
-|----------|-------------------------------------------|
-| `1`-`4`  | Answer                                    |
-| `x`/esc  | Skip this question                        |
-| `b`      | Later — requeue after 5 items             |
-| `B`      | Bury — gone for today                     |
-| `q`      | Quit the pane                             |
+| Key       | Action                               |
+|-----------|--------------------------------------|
+| `1` to `4`| Answer                               |
+| `x`, esc  | Skip this question                   |
+| `b`       | Later, requeue after 5 items         |
+| `B`       | Bury, gone for today                 |
+| `q`       | Quit the pane (idle card only)       |
 
 ## Themes
 
 ```bash
-export RESKILL_THEME=everforest  # default
-export RESKILL_THEME=mono        # BOLD/DIM only, works on any background
-export NO_COLOR=1                # standard -- also forces mono
+export RESKILL_THEME=everforest  # default on truecolor terminals
+export RESKILL_THEME=mono        # BOLD/DIM only
+export NO_COLOR=1                # standard, also forces mono
 ```
+
+Auto-falls-back to mono when `COLORTERM` is not `truecolor` or
+`24bit` (Apple Terminal.app, many ssh contexts).
 
 ## Tuning
 
@@ -125,11 +120,14 @@ export RESKILL_SAME_CONCEPT_COOLDOWN=90
 
 ## What's inside
 
-- 54 hand-written questions across 50 concepts
-- Python (async, typing, numpy/pandas/torch, stdlib gotchas,
-  packaging, testing) + shell, git, SQL, React/TS essentials
+- 74 hand-written questions across 50 concepts
+- Python (async, typing, numpy / pandas / torch, stdlib gotchas,
+  packaging, testing) plus shell, git, SQL, React and TypeScript
+  essentials
 - 8 question formats: output, bug, tradeoff, scenario, why, gotcha,
   refactor, cloze
+- LLM-generated questions from your live transcript or real commit
+  diffs via `reskill gen --live`
 
 ## Uninstall
 
@@ -137,7 +135,7 @@ export RESKILL_SAME_CONCEPT_COOLDOWN=90
 reskill uninstall   # removes hooks + statusline, keeps a backup
 ```
 
-Your existing `settings.json` hooks and statusLine are preserved — we
+Your existing `settings.json` hooks and statusLine are preserved. We
 only touch entries we own.
 
 ## Status
@@ -148,13 +146,13 @@ the next major milestone.
 
 ## License
 
-MIT. See LICENSE.
+MIT. See [LICENSE](./LICENSE).
 
 ## Credits
 
 Built by Amit Subhash ([@AmitSubhash](https://github.com/AmitSubhash)).
-Scheduler grounded in the spaced-repetition literature: Bjork & Bjork
-2011 (desirable difficulties), Rohrer & Taylor 2007 (interleaving),
-Butler & Roediger 2008 (delayed feedback), Wilson et al. 2019 (85%
-rule), Butterfield & Metcalfe 2001 (hypercorrection). Mistakes are
-mine.
+Scheduler grounded in the spaced-repetition literature: Bjork &amp;
+Bjork 2011 (desirable difficulties), Rohrer &amp; Taylor 2007
+(interleaving), Butler &amp; Roediger 2008 (delayed feedback), Wilson
+et al. 2019 (85% rule), Butterfield &amp; Metcalfe 2001
+(hypercorrection). Mistakes are mine.
