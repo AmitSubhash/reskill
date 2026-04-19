@@ -588,6 +588,31 @@ TEMPLATE_BANK: dict[str, list[Question]] = {
                 "but disallows new attributes and complicates multiple inheritance."
             ),
         ),
+        _q(
+            concept="slots",
+            format="gotcha",
+            prompt="Why does this code raise AttributeError?",
+            code=(
+                "class Node:\n"
+                "    __slots__ = ('value',)\n"
+                "\n"
+                "n = Node()\n"
+                "n.value = 1\n"
+                "n.cached = 2   # <-- AttributeError"
+            ),
+            opts=[
+                ("__slots__ must be a list, not a tuple", False),
+                ("__slots__ forbids any attribute not listed, blocking dynamic additions", True),
+                ("`cached` shadows a builtin slot name", False),
+                ("Must use __setattr__ directly when __slots__ is set", False),
+            ],
+            explanation=(
+                "A slotted class has no __dict__, so there is nowhere to store "
+                "attributes that aren't named in __slots__. Add '__dict__' to the "
+                "slots tuple to opt back into dynamic attributes (forfeiting most "
+                "of the memory win), or list every attribute you need."
+            ),
+        ),
     ],
     "dataclass_frozen": [
         _q(
@@ -631,6 +656,27 @@ TEMPLATE_BANK: dict[str, list[Question]] = {
                 "lines, not 4096-byte blocks."
             ),
         ),
+        _q(
+            concept="walrus",
+            format="idiom",
+            prompt="Most idiomatic way to filter a list and reuse the computed value?",
+            code=(
+                "# goal: keep names whose lower-cased form starts with 'a'\n"
+                "# and avoid calling .lower() twice per item"
+            ),
+            opts=[
+                ("[n for n in names if n.lower().startswith('a')]", False),
+                ("[low for n in names if (low := n.lower()).startswith('a')]", True),
+                ("[n.lower() for n in names if n.startswith('a')]  # different result", False),
+                ("list(filter(lambda n: n.lower().startswith('a'), names))", False),
+            ],
+            explanation=(
+                "The walrus inside a comprehension lets you compute once and "
+                "reuse in both the filter and the value. Writing it without "
+                "`:=` either calls `.lower()` twice per element or changes the "
+                "semantics (pre-filtering on the raw string)."
+            ),
+        ),
     ],
     "f_string_debug": [
         _q(
@@ -653,6 +699,27 @@ TEMPLATE_BANK: dict[str, list[Question]] = {
                 "debug-print idiom in modern Python."
             ),
         ),
+        _q(
+            concept="f-string",
+            format="output",
+            prompt="What does this print?",
+            code=(
+                "name = 'ada'\n"
+                "print(f'{name!r:>10}')"
+            ),
+            opts=[
+                ("       ada", False),
+                ("     'ada'", True),
+                ("'       ada'", False),
+                ("TypeError: conversion after format spec", False),
+            ],
+            explanation=(
+                "The `!r` conversion runs first (yielding the 5-char string "
+                "`'ada'`), then the format spec `>10` right-justifies that in "
+                "a width-10 field. Order in f-strings is always value -> "
+                "conversion (`!r`/`!s`/`!a`) -> format spec."
+            ),
+        ),
     ],
     "dict_order": [
         _q(
@@ -669,6 +736,29 @@ TEMPLATE_BANK: dict[str, list[Question]] = {
                 "Insertion-order is GUARANTEED since Python 3.7. OrderedDict "
                 "still has uses (move_to_end, equality is order-sensitive) but "
                 "for plain ordering, dict is enough now."
+            ),
+        ),
+        _q(
+            concept="dict",
+            format="output",
+            prompt="What does this print?",
+            code=(
+                "from collections import OrderedDict\n"
+                "a = {'x': 1, 'y': 2}\n"
+                "b = {'y': 2, 'x': 1}\n"
+                "print(a == b, OrderedDict(a) == OrderedDict(b))"
+            ),
+            opts=[
+                ("True True", False),
+                ("True False", True),
+                ("False True", False),
+                ("False False", False),
+            ],
+            explanation=(
+                "Plain dict equality is order-INSENSITIVE even though iteration "
+                "preserves insertion order. OrderedDict equality is "
+                "order-SENSITIVE -- that's one of the few remaining reasons to "
+                "reach for it. Same keys, different order, different answer."
             ),
         ),
     ],
@@ -688,6 +778,27 @@ TEMPLATE_BANK: dict[str, list[Question]] = {
                 "encoding, and avoids file-descriptor leaks since `read_text` "
                 "closes for you. Always pass `encoding=` -- the default is "
                 "platform-dependent (locale.getencoding)."
+            ),
+        ),
+        _q(
+            concept="pathlib",
+            format="gotcha",
+            prompt="Why does `root.glob('*.py')` miss files inside subdirectories?",
+            code=(
+                "root = Path('src')\n"
+                "files = list(root.glob('*.py'))  # only top-level hits"
+            ),
+            opts=[
+                ("`.glob` only matches directories, use `.iterdir` for files", False),
+                ("`*` doesn't cross directory boundaries; use `rglob` or `**/*.py`", True),
+                ("Need to call `.resolve()` first for glob to recurse", False),
+                ("Path.glob ignores hidden directories, including src/", False),
+            ],
+            explanation=(
+                "In pathlib/fnmatch, a single `*` matches one path segment. To "
+                "recurse, either use `root.rglob('*.py')` or the explicit "
+                "double-star `root.glob('**/*.py')`. Same rule as shell globbing "
+                "under globstar."
             ),
         ),
     ],
@@ -712,6 +823,27 @@ TEMPLATE_BANK: dict[str, list[Question]] = {
                 "`datetime.utcnow()` is a footgun: returns naive UTC. Always "
                 "use `datetime.now(timezone.utc)` (or `zoneinfo.ZoneInfo('UTC')`). "
                 "Naive vs aware datetimes won't compare or subtract."
+            ),
+        ),
+        _q(
+            concept="datetime",
+            format="gotcha",
+            prompt="A scheduled event for 2:30 AM fires twice on the fall-back DST day. Most robust fix?",
+            code=(
+                "from zoneinfo import ZoneInfo\n"
+                "dt = datetime(2025, 11, 2, 2, 30, tzinfo=ZoneInfo('America/New_York'))"
+            ),
+            opts=[
+                ("Store local time; zoneinfo handles DST automatically", False),
+                ("Store UTC internally and only convert to local for display", True),
+                ("Pin `fold=0` and trust pytz instead of zoneinfo", False),
+                ("Switch to `datetime.utcnow()` everywhere for safety", False),
+            ],
+            explanation=(
+                "Local-time fields during the fall-back hour are ambiguous "
+                "(2:30 AM happens twice). `fold=0/1` lets you disambiguate but "
+                "is easy to forget. The durable fix is store-as-UTC, "
+                "display-as-local. Naive utcnow is the opposite of what you want."
             ),
         ),
     ],
@@ -739,6 +871,32 @@ TEMPLATE_BANK: dict[str, list[Question]] = {
                 "`shell=True` only with hard-coded strings."
             ),
         ),
+        _q(
+            concept="subprocess",
+            format="bug",
+            prompt="`result.stdout.splitlines()` raises TypeError. Why?",
+            code=(
+                "result = subprocess.run(\n"
+                "    ['git', 'log', '--oneline'],\n"
+                "    capture_output=True, check=True,\n"
+                ")\n"
+                "for line in result.stdout.splitlines():\n"
+                "    print(line.strip().upper())"
+            ),
+            opts=[
+                ("`check=True` replaces stdout with None on success", False),
+                ("stdout is `bytes` by default; need `text=True` (or decode)", True),
+                ("`capture_output` and `check` are mutually exclusive", False),
+                ("`splitlines()` doesn't exist on subprocess output objects", False),
+            ],
+            explanation=(
+                "Without `text=True` (alias `universal_newlines=True`), "
+                "stdout/stderr are `bytes`. `.upper()` on bytes works but then "
+                "collides with later str ops; `.strip()` on bytes is fine but "
+                "mixing with f-strings breaks. Prefer `text=True` or set "
+                "`encoding='utf-8'`."
+            ),
+        ),
     ],
     "logging_lazy": [
         _q(
@@ -762,6 +920,24 @@ TEMPLATE_BANK: dict[str, list[Question]] = {
                 "burning CPU on hot paths in production where DEBUG is off."
             ),
         ),
+        _q(
+            concept="logging",
+            format="why",
+            prompt="A library author writes `logging.getLogger(__name__)` but never adds handlers. Why?",
+            opts=[
+                ("Oversight -- handlers are required for logs to appear", False),
+                ("Libraries should only emit; the APPLICATION configures handlers", True),
+                ("Handlers must be attached to the root logger exclusively", False),
+                ("Without handlers, nothing is emitted, silencing the library by default", False),
+            ],
+            explanation=(
+                "The convention is: libraries create named loggers and emit. "
+                "Applications decide where logs go (stdout, file, Sentry) and "
+                "at what level. If the app configures nothing, Python's "
+                "last-resort handler still emits warnings+ to stderr, so the "
+                "library isn't silent by default."
+            ),
+        ),
     ],
     "typeddict": [
         _q(
@@ -779,6 +955,24 @@ TEMPLATE_BANK: dict[str, list[Question]] = {
                 "payloads -- no runtime construction cost, mypy-checked. "
                 "`NotRequired` (PEP 655) marks optional keys without unioning "
                 "the value type."
+            ),
+        ),
+        _q(
+            concept="typing-typeddict",
+            format="idiom",
+            prompt="You want a type alias for a matrix row that's reusable and mypy-friendly. Best in 3.12+?",
+            opts=[
+                ("Row = list[float]  # assignment-based alias", False),
+                ("type Row = list[float]  # PEP 695 type statement", True),
+                ("Row: TypeAlias = list[float]  # still needed", False),
+                ("Row = NewType('Row', list[float])  # strictest", False),
+            ],
+            explanation=(
+                "PEP 695 (3.12) added the `type` soft keyword for lazy-"
+                "evaluated, explicitly-aliased types -- resolves forward "
+                "references and avoids `TypeAlias` noise. `NewType` creates a "
+                "distinct nominal type, which is stricter than what an alias "
+                "asks for."
             ),
         ),
     ],
@@ -800,6 +994,32 @@ TEMPLATE_BANK: dict[str, list[Question]] = {
                 "interface module."
             ),
         ),
+        _q(
+            concept="typing-protocol",
+            format="gotcha",
+            prompt="What does `isinstance(obj, HasLen)` do here?",
+            code=(
+                "from typing import Protocol, runtime_checkable\n"
+                "\n"
+                "@runtime_checkable\n"
+                "class HasLen(Protocol):\n"
+                "    def __len__(self) -> int: ...\n"
+                "\n"
+                "isinstance([1, 2], HasLen)"
+            ),
+            opts=[
+                ("Raises TypeError -- Protocols aren't usable at runtime", False),
+                ("Returns True; @runtime_checkable enables structural isinstance (members only, not signatures)", True),
+                ("Returns False -- list doesn't inherit from Protocol", False),
+                ("Always True for any object, since Protocol has no methods at runtime", False),
+            ],
+            explanation=(
+                "`@runtime_checkable` lets `isinstance` verify that the object "
+                "has the named attributes, but it does NOT check signatures or "
+                "return types. It's a cheap structural probe, useful for duck-"
+                "typed dispatch but not a substitute for a static type checker."
+            ),
+        ),
     ],
     "gil_decision": [
         _q(
@@ -819,6 +1039,24 @@ TEMPLATE_BANK: dict[str, list[Question]] = {
                 "often releases the GIL and CAN benefit from threads.)"
             ),
         ),
+        _q(
+            concept="concurrency",
+            format="scenario",
+            prompt="You have 500 outbound HTTP requests to slow third-party APIs. Python 3.11. Best?",
+            opts=[
+                ("ProcessPoolExecutor with 500 workers", False),
+                ("asyncio + aiohttp with a semaphore-bounded gather", True),
+                ("Single-threaded requests.get in a for loop with lru_cache", False),
+                ("threading.Thread per request, no pool", False),
+            ],
+            explanation=(
+                "I/O-bound work is asyncio's sweet spot: one event loop "
+                "juggles thousands of in-flight sockets with tiny overhead. "
+                "Processes are heavy and wasteful here. A raw thread-per-"
+                "request works but burns memory on stacks and context "
+                "switches -- bound it with a pool or a semaphore."
+            ),
+        ),
     ],
     "asyncio_taskgroup": [
         _q(
@@ -836,6 +1074,24 @@ TEMPLATE_BANK: dict[str, list[Question]] = {
                 "raises, siblings are cancelled and an ExceptionGroup is "
                 "raised. `gather` swallows the second-and-onward errors and "
                 "leaks tasks on cancel."
+            ),
+        ),
+        _q(
+            concept="async-taskgroup",
+            format="idiom",
+            prompt="Three sibling tasks all fail. How do you catch only the TimeoutError subset from the TaskGroup?",
+            opts=[
+                ("except TimeoutError as e: ...   # still works on ExceptionGroup", False),
+                ("except* TimeoutError as eg: ...  # PEP 654 except-star", True),
+                ("for exc in tg.exceptions:\n    if isinstance(exc, TimeoutError): ...", False),
+                ("Wrap the TaskGroup in asyncio.wait_for", False),
+            ],
+            explanation=(
+                "TaskGroup raises ExceptionGroup. PEP 654's `except*` "
+                "(3.11+) splits the group by type: matched exceptions go to "
+                "the handler as a sub-group, the rest re-propagate. A plain "
+                "`except TimeoutError` won't match an ExceptionGroup that "
+                "CONTAINS one."
             ),
         ),
     ],
@@ -863,6 +1119,30 @@ TEMPLATE_BANK: dict[str, list[Question]] = {
                 "`+=` on an int is not.)"
             ),
         ),
+        _q(
+            concept="concurrency-race",
+            format="bug",
+            prompt="This 'check then act' cache occasionally double-fetches. Why?",
+            code=(
+                "def get(key):\n"
+                "    if key not in cache:          # <-- check\n"
+                "        cache[key] = fetch(key)   # <-- act\n"
+                "    return cache[key]"
+            ),
+            opts=[
+                ("`dict.__contains__` isn't thread-safe", False),
+                ("TOCTOU: another thread can insert between the check and the act", True),
+                ("`fetch` should be memoized with @lru_cache instead", False),
+                ("Need `threading.local()` around the cache dict", False),
+            ],
+            explanation=(
+                "Classic time-of-check / time-of-use race. Two threads see "
+                "the key missing, both call fetch. Fix with a lock around "
+                "the region, use `cache.setdefault(key, fetch(key))` "
+                "(still calls fetch twice), or `dict.get` + lock, or a "
+                "proper cache lib with single-flight semantics."
+            ),
+        ),
     ],
     "pytest_parametrize": [
         _q(
@@ -879,6 +1159,31 @@ TEMPLATE_BANK: dict[str, list[Question]] = {
                 "`parametrize` makes each case a separate reported test (own "
                 "name, own pass/fail). A for-loop stops at the first failure "
                 "and gives one combined report -- much harder to debug."
+            ),
+        ),
+        _q(
+            concept="testing-parametrize",
+            format="why",
+            prompt="Why add `ids=[...]` to a parametrize with dict payloads?",
+            code=(
+                "@pytest.mark.parametrize(\n"
+                "    'payload,expected',\n"
+                "    [({'role':'admin'}, 200), ({'role':'guest'}, 403)],\n"
+                "    ids=['admin-allowed', 'guest-forbidden'],\n"
+                ")"
+            ),
+            opts=[
+                ("Required -- pytest won't run the test without ids", False),
+                ("Readable test names in reports and `-k` filters; default repr is noisy or non-deterministic", True),
+                ("Makes the fixture cache-key deterministic for xdist", False),
+                ("ids control the order the cases run in", False),
+            ],
+            explanation=(
+                "Without `ids`, pytest auto-generates them from the values, "
+                "which is fine for primitives but ugly for dicts/objects "
+                "(`payload0`, `payload1`). Custom ids give you grep-friendly "
+                "names in test output and let you run a single case with "
+                "`pytest -k guest-forbidden`."
             ),
         ),
     ],
@@ -908,6 +1213,28 @@ TEMPLATE_BANK: dict[str, list[Question]] = {
                 "`requests.get` patch can't reach."
             ),
         ),
+        _q(
+            concept="testing-mock",
+            format="why",
+            prompt="Why do senior devs default to `autospec=True` when patching?",
+            code=(
+                "@patch('myapp.db.Client', autospec=True)\n"
+                "def test_save(mock_cls): ..."
+            ),
+            opts=[
+                ("It runs the real constructor first for realism", False),
+                ("It enforces the mocked object's signature so typo'd calls fail fast", True),
+                ("It auto-restores the patch if the test raises", False),
+                ("autospec enables async support in MagicMock", False),
+            ],
+            explanation=(
+                "Plain `MagicMock` accepts any call, any attribute -- "
+                "`mock.crete_user(...)` (typo) silently returns another mock "
+                "and the test still passes. `autospec=True` copies the real "
+                "signature, so wrong calls raise at test-time. Pair with "
+                "`side_effect=Exception(...)` to simulate failures."
+            ),
+        ),
     ],
     "numpy_view_copy": [
         _q(
@@ -934,6 +1261,32 @@ TEMPLATE_BANK: dict[str, list[Question]] = {
                 "have ghost mutations."
             ),
         ),
+        _q(
+            concept="numpy",
+            format="output",
+            prompt="What does `a[0, 0]` print at the end?",
+            code=(
+                "import numpy as np\n"
+                "a = np.arange(6).reshape(2, 3)\n"
+                "idx = np.array([0, 1])\n"
+                "b = a[idx]          # fancy indexing\n"
+                "b[0, 0] = 99\n"
+                "print(a[0, 0])"
+            ),
+            opts=[
+                ("99 (any indexing returns a view)", False),
+                ("0 (fancy integer indexing returns a COPY)", True),
+                ("Raises -- can't mix slices and arrays", False),
+                ("Implementation-defined between numpy versions", False),
+            ],
+            explanation=(
+                "Integer-array and boolean-mask indexing ALWAYS copy. Only "
+                "basic slicing (`a[:, 1:]`, `a[0]`) returns a view. "
+                "`np.may_share_memory(a, b)` is the sanity check when you're "
+                "unsure; also consider `np.ascontiguousarray` before passing "
+                "to C extensions."
+            ),
+        ),
     ],
     "numpy_broadcasting": [
         _q(
@@ -957,6 +1310,31 @@ TEMPLATE_BANK: dict[str, list[Question]] = {
                 "shapes, every dim must match or be 1."
             ),
         ),
+        _q(
+            concept="numpy-broadcast",
+            format="bug",
+            prompt="You want to subtract per-column means from a (1000, 4) matrix. Which fails?",
+            code=(
+                "X = np.random.rand(1000, 4)\n"
+                "mu = X.mean(axis=0)   # shape (4,)\n"
+                "# A: X - mu\n"
+                "# B: X - mu[:, None]\n"
+                "# C: X - mu.reshape(1, 4)"
+            ),
+            opts=[
+                ("A fails -- (1000,4) and (4,) don't align", False),
+                ("B fails -- (4,1) can't broadcast against (1000,4)", True),
+                ("C fails -- reshape can't add axes", False),
+                ("All three work identically", False),
+            ],
+            explanation=(
+                "Right-align shapes: (1000,4) vs (4,) pads to (1,4) -> "
+                "broadcasts fine (A and C work). (4,1) pads to (1,4,1) vs "
+                "(1000,4) -- trailing dims 1 and 4 match, but middle 4 vs "
+                "1000 does not. `mu[:, None]` is the right move for "
+                "per-ROW means, not columns."
+            ),
+        ),
     ],
     "pandas_settingwithcopy": [
         _q(
@@ -977,6 +1355,29 @@ TEMPLATE_BANK: dict[str, list[Question]] = {
                 "Chained indexing (`df[mask]['col'] = ...`) may write to a "
                 "view OR a copy -- pandas can't tell. Always express the "
                 "single assignment with `.loc[mask, col] = val`."
+            ),
+        ),
+        _q(
+            concept="pandas",
+            format="gotcha",
+            prompt="Why do experienced pandas users avoid `inplace=True`?",
+            code=(
+                "df.drop_duplicates(inplace=True)\n"
+                "df.fillna(0, inplace=True)\n"
+                "df.rename(columns={'a':'A'}, inplace=True)"
+            ),
+            opts=[
+                ("It's faster but dangerous in multi-threaded code", False),
+                ("It doesn't save memory (still copies internally), breaks method chaining, and is slated for removal", True),
+                ("`inplace=True` is a typo -- the real kwarg is `in_place=True`", False),
+                ("It only works on columns with a unique index", False),
+            ],
+            explanation=(
+                "The pandas team has deprecated most `inplace` paths: they "
+                "often allocate a new block internally anyway, they break "
+                "fluent chains (`df.fillna(0).drop_duplicates()`), and they "
+                "complicate Copy-on-Write (CoW) semantics in 2.x. Prefer "
+                "`df = df.fillna(0)` or a pipeline."
             ),
         ),
     ],
@@ -1003,6 +1404,29 @@ TEMPLATE_BANK: dict[str, list[Question]] = {
                 "in training loops."
             ),
         ),
+        _q(
+            concept="pytorch",
+            format="bug",
+            prompt="Validation accuracy is erratic AND training is 3x slower than expected. Which single change helps both?",
+            code=(
+                "for x, y in val_loader:\n"
+                "    out = model(x)\n"
+                "    val_loss += loss_fn(out, y).item()"
+            ),
+            opts=[
+                ("Wrap the loop in `with torch.no_grad(): model.eval()`", True),
+                ("Call `model.train()` before the loop -- eval breaks BatchNorm", False),
+                ("Replace `.item()` with `.numpy()` to save memory", False),
+                ("Increase DataLoader `num_workers` to 16", False),
+            ],
+            explanation=(
+                "`model.eval()` disables Dropout and switches BatchNorm to "
+                "running stats -- that's the erratic accuracy fix. "
+                "`torch.no_grad()` stops autograd from building the graph, "
+                "which kills the memory/speed overhead during eval. Both are "
+                "always-on in production inference loops."
+            ),
+        ),
     ],
     "matplotlib_close": [
         _q(
@@ -1025,6 +1449,29 @@ TEMPLATE_BANK: dict[str, list[Question]] = {
                 "`plt.subplots()` registers the figure with the pyplot state "
                 "machine. Add `plt.close(fig)` (or use the OO API: "
                 "`Figure(); FigureCanvasAgg(...).print_png(...)`)."
+            ),
+        ),
+        _q(
+            concept="matplotlib",
+            format="why",
+            prompt="In a headless server / CI job, why switch to the Agg backend before importing pyplot?",
+            code=(
+                "import matplotlib\n"
+                "matplotlib.use('Agg')\n"
+                "import matplotlib.pyplot as plt"
+            ),
+            opts=[
+                ("Agg renders faster than the interactive backends", False),
+                ("Default backends try to open a GUI window, which fails without a display (Tkinter/Qt error)", True),
+                ("Agg is required to save PNG -- other backends can't", False),
+                ("It silences all matplotlib warnings", False),
+            ],
+            explanation=(
+                "Interactive backends (TkAgg, QtAgg, MacOSX) need a display "
+                "server; headless boxes throw `_tkinter.TclError` or Qt "
+                "display-init errors. Agg is a pure pixel-buffer backend -- "
+                "no GUI needed -- and outputs PNG/PDF/SVG fine. Set it BEFORE "
+                "the first `import pyplot` or the backend is locked in."
             ),
         ),
     ],
